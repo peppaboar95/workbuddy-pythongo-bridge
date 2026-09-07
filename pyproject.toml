@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workbuddy-pythongo-bridge"
+version = "0.3.3"
+description = "Fail-closed local bridge between Tencent WorkBuddy and InfiniTrader PythonGO"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
+authors = [
+  { name = "WorkBuddy PythonGO Bridge" },
+]
+keywords = ["workbuddy", "mcp", "pythongo", "futures", "risk-control"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/peppaboar95/workbuddy-pythongo-bridge"
+Repository = "https://github.com/peppaboar95/workbuddy-pythongo-bridge"
+Issues = "https://github.com/peppaboar95/workbuddy-pythongo-bridge/issues"
+Security = "https://github.com/peppaboar95/workbuddy-pythongo-bridge/security"
+
+[project.scripts]
+workbuddy-pythongo = "workbuddy_pythongo.manager:main"
+workbuddy-pythongo-console = "workbuddy_pythongo.console:main"
+workbuddy-pythongo-desktop = "workbuddy_pythongo.desktop:main"
+workbuddy-pythongo-init = "workbuddy_pythongo.bootstrap:main"
+workbuddy-pythongo-mcp = "workbuddy_pythongo.mcp_server:main"
+workbuddy-pythongo-worker = "workbuddy_pythongo.worker:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+workbuddy_pythongo = ["assets/*.py"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+

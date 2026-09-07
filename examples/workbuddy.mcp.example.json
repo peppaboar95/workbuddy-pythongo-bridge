@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "workbuddy-pythongo": {
+      "command": "C:\\ABSOLUTE\\PATH\\TO\\python.exe",
+      "args": [
+        "-m",
+        "workbuddy_pythongo.mcp_server",
+        "--config",
+        "C:\\ABSOLUTE\\PATH\\TO\\config\\bridge.json"
+      ]
+    }
+  }
+}

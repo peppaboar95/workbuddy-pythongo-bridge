@@ -1,0 +1,2 @@
+"""Deployable PythonGO assets."""
+

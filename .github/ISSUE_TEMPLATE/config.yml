@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密安全报告
+    url: https://github.com/peppaboar95/workbuddy-pythongo-bridge/security/advisories/new
+    about: 授权绕过、重复报单、密钥或账户数据泄漏请勿公开报告
+

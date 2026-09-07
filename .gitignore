@@ -1,0 +1,60 @@
+# Python build and cache files
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+build/
+dist/
+
+# Local IDE and agent metadata
+.idea/
+.vscode/
+.codex/
+.agents/
+
+# WorkBuddy / MCP local configuration
+workbuddy.mcp.json
+mcp.json
+
+# WorkBuddy-PythonGO runtime and generated bundles
+runtime/
+data/
+state/
+queue/
+pythongo_ready/
+execution_journal/
+p0_validation/
+
+# Databases, journals and logs
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.wal
+*.shm
+*.log
+logs/
+dead_letter/
+
+# Credentials and machine-bound authorization
+message_keys.json
+worker.token
+*.pem
+*.key
+*.pfx
+*.p12
+pythongo_adapter.json
+pythongo_profile.json
+*.signed.json
+
+# Local diagnostics and release inspection directories
+diagnostic*/
+.wheel-inspect/
+

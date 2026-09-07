@@ -1,0 +1,23 @@
+{
+  "account_alias": "main_futures",
+  "instrument": {
+    "exchange": "SHFE",
+    "instrument_id": "REPLACE_WITH_CONTRACT"
+  },
+  "action": "OPEN_LONG",
+  "sizing": {
+    "type": "FIXED_VOLUME",
+    "value": 1
+  },
+  "price_policy": {
+    "type": "FIXED_LIMIT",
+    "limit_price": 1.0,
+    "max_deviation_pct": 0.02
+  },
+  "hedge_flag": "SPECULATION",
+  "execution_mode": "OBSERVE_ONLY",
+  "source": {
+    "type": "MANUAL_TEST",
+    "signal_id": "replace-with-a-unique-signal-id"
+  }
+}
