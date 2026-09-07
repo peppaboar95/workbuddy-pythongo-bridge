@@ -197,9 +197,23 @@ class BridgeCore:
                 heartbeat_age = age_seconds(heartbeat["received_at"]) if heartbeat else None
                 profile_status = heartbeat["profile_status"] if heartbeat else "UNKNOWN"
                 mode_match = bool(heartbeat and heartbeat["mode"] == mode)
+                try:
+                    expected_policy_generation = int(self._state(
+                        connection, "margin_policy_generation:%s" % account.alias, "0",
+                    ))
+                except (TypeError, ValueError):
+                    expected_policy_generation = 0
+                expected_policy_hash = self._state(
+                    connection, "margin_policy_hash:%s" % account.alias, "",
+                )
+                policy_match = bool(
+                    payload and
+                    payload.get("margin_policy_generation") == expected_policy_generation and
+                    payload.get("margin_policy_hash") == expected_policy_hash
+                )
                 ready = bool(
                     heartbeat and heartbeat["status"] == "READY" and heartbeat_age <= 15
-                    and mode_match and not bool((payload or {}).get("local_halt"))
+                    and mode_match and policy_match and not bool((payload or {}).get("local_halt"))
                 )
                 if mode != "OBSERVE_ONLY" and profile_status != "VALID":
                     ready = False
@@ -210,6 +224,9 @@ class BridgeCore:
                     "heartbeat_age_seconds": heartbeat_age,
                     "adapter_mode": heartbeat["mode"] if heartbeat else None,
                     "mode_match": mode_match,
+                    "margin_policy_match": policy_match,
+                    "margin_policy_generation": (payload or {}).get("margin_policy_generation"),
+                    "expected_margin_policy_generation": expected_policy_generation,
                     "profile_status": profile_status,
                     "local_halt": bool((payload or {}).get("local_halt")),
                     "ready": ready,
@@ -483,6 +500,16 @@ class BridgeCore:
     def _apply_system_gates(self, connection, request, result, account):
         mode = self._mode(connection)
         heartbeat = connection.execute("SELECT * FROM heartbeats WHERE adapter_instance=?", (account.adapter_instance,)).fetchone()
+        heartbeat_payload = _payload(heartbeat) or {}
+        try:
+            expected_policy_generation = int(self._state(
+                connection, "margin_policy_generation:%s" % account.alias, "0",
+            ))
+        except (TypeError, ValueError):
+            expected_policy_generation = 0
+        expected_policy_hash = self._state(
+            connection, "margin_policy_hash:%s" % account.alias, "",
+        )
         adapter_gate = {
             "worker_mode": mode,
             "requested_mode": request["execution_mode"],
@@ -492,8 +519,12 @@ class BridgeCore:
             "heartbeat_age_seconds": age_seconds(heartbeat["received_at"]) if heartbeat else None,
             "adapter_mode": heartbeat["mode"] if heartbeat else None,
             "profile_status": heartbeat["profile_status"] if heartbeat else "UNKNOWN",
-            "limited_auto_protocol": (_payload(heartbeat) or {}).get("limited_auto_protocol") if heartbeat else None,
-            "limited_auto_local_pause": bool((_payload(heartbeat) or {}).get("limited_auto_local_pause")) if heartbeat else False,
+            "limited_auto_protocol": heartbeat_payload.get("limited_auto_protocol") if heartbeat else None,
+            "limited_auto_local_pause": bool(heartbeat_payload.get("limited_auto_local_pause")) if heartbeat else False,
+            "margin_policy_generation": heartbeat_payload.get("margin_policy_generation") if heartbeat else None,
+            "margin_policy_hash": heartbeat_payload.get("margin_policy_hash") if heartbeat else None,
+            "expected_margin_policy_generation": expected_policy_generation,
+            "expected_margin_policy_hash": expected_policy_hash,
         }
         reasons = list(result["risk"]["reasons"])
         if request["execution_mode"] != mode:
@@ -508,6 +539,11 @@ class BridgeCore:
             reasons.append("MODE_MISMATCH")
         if mode != "OBSERVE_ONLY" and adapter_gate["profile_status"] != "VALID":
             reasons.append("PROFILE_INVALID")
+        if (
+            adapter_gate["margin_policy_generation"] != expected_policy_generation or
+            adapter_gate["margin_policy_hash"] != expected_policy_hash
+        ):
+            reasons.append("MARGIN_POLICY_MISMATCH")
         if mode == "LIMITED_AUTO":
             permit = self._active_auto_permit_row(connection, account.alias)
             if not permit:
@@ -533,6 +569,10 @@ class BridgeCore:
             "profile_status": adapter_gate["profile_status"],
             "limited_auto_protocol": adapter_gate["limited_auto_protocol"],
             "limited_auto_local_pause": adapter_gate["limited_auto_local_pause"],
+            "margin_policy_generation": adapter_gate["margin_policy_generation"],
+            "margin_policy_hash": adapter_gate["margin_policy_hash"],
+            "expected_margin_policy_generation": adapter_gate["expected_margin_policy_generation"],
+            "expected_margin_policy_hash": adapter_gate["expected_margin_policy_hash"],
         }
         result["decision_material"]["risk_reasons"] = result["risk"]["reasons"]
         result["decision_fingerprint"] = hash_json(result["decision_material"])
@@ -639,6 +679,20 @@ class BridgeCore:
                 reasons.append("AUTO_ADAPTER_LOCALLY_PAUSED")
             if heartbeat_payload.get("limited_auto_protocol") != 1:
                 reasons.append("AUTO_ADAPTER_PROTOCOL_MISMATCH")
+            try:
+                expected_policy_generation = int(self._state(
+                    connection, "margin_policy_generation:%s" % account.alias, "0",
+                ))
+            except (TypeError, ValueError):
+                expected_policy_generation = 0
+            expected_policy_hash = self._state(
+                connection, "margin_policy_hash:%s" % account.alias, "",
+            )
+            if (
+                heartbeat_payload.get("margin_policy_generation") != expected_policy_generation or
+                heartbeat_payload.get("margin_policy_hash") != expected_policy_hash
+            ):
+                reasons.append("AUTO_MARGIN_POLICY_MISMATCH")
         account_snapshot = self._latest_account(connection, account.alias)
         if (
             not account_snapshot or

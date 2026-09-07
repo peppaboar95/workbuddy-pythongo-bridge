@@ -1,6 +1,6 @@
 # WorkBuddy 与无限易（PythonGO）桥接程序设计
 
-> 状态：Design v0.3.3（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）  
+> 状态：Design v0.3.4（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）
 > 日期：2026-08-27  
 > 适用范围：Windows、Tencent WorkBuddy、无限易客户端、PythonGO v2、期货行情监控及模拟/实盘交易  
 > 风险声明：本文描述交易基础设施，不构成投资建议。任何实盘能力必须经过只读、空跑、模拟、人工确认和小额灰度验证。
@@ -1455,11 +1455,11 @@ MCP `cancel_order` 接受桥接订单 ID，Worker 映射到明确的 PythonGO `o
       pythongo_profile.json
 ```
 
-首版沿用 QMT Bridge 的可观察控制台 Worker 和桌面启动脚本，不强制安装 Windows 服务；需要无人值守时再评估服务化及专用 Windows 会话。Manager 提供 `setup`、`start`、`status`、`doctor`、`refresh-margin-reference` 和升级入口。数据、配置、密钥和日志目录使用 ACL 限制。
+首版沿用 QMT Bridge 的可观察控制台 Worker 和桌面启动脚本，不强制安装 Windows 服务；需要无人值守时再评估服务化及专用 Windows 会话。Manager 提供 `setup`、`start`、`status`、`doctor`、`refresh-margin-reference`、`migrate-margin-policy` 和升级入口。数据、配置、密钥和日志目录使用 ACL 限制。
 
-桌面启动入口在模式菜单前静默执行 `refresh-margin-reference --if-due`：同一上海时区自然日内，本机签名、CSV 哈希和本机刷新时间均有效时即可跳过网络刷新；源页面的手续费更新时间过旧只产生软告警，不导致当日重复下载。正常刷新或跳过时不得向启动窗口打印 CSV 加载过程或结果 JSON，失败时只显示一行简短警告。刷新失败不得阻止观察模式启动，也不得让超过本机刷新硬阈值的旧文件继续授权开仓；无限易原生比例也不可用时仍由既有开仓风控失败关闭。保证金更新不再提供独立桌面入口；人工强制刷新仍使用 Manager 命令。
+桌面启动入口在模式菜单前静默执行 `refresh-margin-reference --if-due`：同一上海时区自然日内，本机签名、CSV 哈希和本机刷新时间均有效时即可跳过网络刷新；源页面的手续费更新时间过旧只产生软告警，不导致当日重复下载。正常刷新或跳过时不得向启动窗口打印 CSV 加载过程或结果 JSON，普通失败时只显示一行简短警告。日常刷新只能校验、原子写入和签名 CSV/元数据，不得修改 Adapter 配置、Profile、模式、熔断或授权。刷新失败不得阻止观察模式启动，也不得让超过本机刷新硬阈值的旧文件继续授权开仓；无限易原生比例也不可用时仍由既有开仓风控失败关闭。保证金更新不再提供独立桌面入口；人工强制刷新仍使用 Manager 命令。
 
-旧 Adapter 配置首次增加本地保证金字段，或从单一 `margin_reference_max_age_hours` 迁移到独立的本机刷新硬阈值与源页面软告警阈值，均属于风险逻辑升级。刷新器必须先调用全局熔断、确认每个 Adapter 本地熔断文件写入成功，再把关联 Profile 的 `verified` 和 `signature` 清空；旧阈值保留为新的本机刷新硬阈值。任何一步失败均返回错误。迁移只触发一次，普通日更不修改 Profile。
+保证金风险策略与参考数据生命周期分离。Adapter 配置保存 `margin_reference_policy_generation` 及由参考文件路径、Schema、本机刷新硬阈值、安全系数和验签要求计算的策略哈希；Adapter 心跳回传两者，Worker 不一致时以 `MARGIN_POLICY_MISMATCH` 失败关闭。旧配置只能通过本机 `migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY` 显式迁移，刷新命令不得代行。仅补齐跟踪字段时不熔断；风险策略实质变化时必须先触发全局和 Adapter 本地熔断、撤销短时/自动授权并使未消费 Preview 失效，再写入新代次。Profile 证明客户端构建、账号和交易映射，不绑定每日参考数据或保证金策略，因此迁移必须保持 Profile 字节不变；只有 Profile 自身的绑定证据变化才要求重新 P0 和签名。桌面启动器遇到 `MARGIN_POLICY_MIGRATION_REQUIRED` 必须明确阻断并显示迁移命令，不得作为普通下载告警继续启动。
 
 桌面启动器在显示四种模式前先执行只读门禁预检：`OBSERVE_ONLY` 始终可选；Profile 未验证、签名/构建/账号绑定不完整或本地熔断开启时，三种非观察模式必须在菜单中标注“暂不可用”及原因。操作者误选受阻模式时返回模式菜单或正常取消，不得把预期的安全拒绝显示成 Worker 异常退出；实际 `set-mode` 仍须独立重复校验，以防预检后状态变化形成竞态绕过。
 

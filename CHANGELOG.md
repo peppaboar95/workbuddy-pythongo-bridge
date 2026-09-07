@@ -2,6 +2,21 @@
 
 本项目的重要变化记录在此。版本号遵循 Semantic Versioning。
 
+## 0.3.4 - 2026-09-08
+
+### Fixed
+
+- 日常 `refresh-margin-reference` 只校验、写入和签名参考数据，不再修改 Adapter 配置、重置签名 Profile 或触发熔断；
+- 新增显式 `migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY`，把旧配置迁移从日常启动路径中分离；
+- 保证金策略实质变化时保留 Profile，但触发 Worker/Adapter 本地熔断、撤销授权并使未消费 Preview 失效；
+- Worker 与 Adapter 通过保证金策略代次和哈希握手，配置或运行实例不同步时失败关闭；
+- 桌面启动器遇到待迁移配置时停止启动并显示处理命令，不再把安全迁移伪装成普通刷新失败。
+
+### Packaging
+
+- 新增保证金刷新、显式迁移、Profile 保留和专用退出码的回归测试；
+- 更新操作手册、设计文档、接口参考和 v0.3.4 发布资产。
+
 ## 0.3.3 - 2026-09-07
 
 ### Changed
@@ -33,4 +48,3 @@
 - 默认模式保持 `OBSERVE_ONLY`；
 - 本地参考缺失、过期、哈希不一致或验签失败时拒绝使用回退保证金；
 - 第三方手续费数据不用于放宽风控。
-

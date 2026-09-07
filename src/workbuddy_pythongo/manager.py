@@ -7,7 +7,7 @@ from .console import clear_halt, set_mode, sign_profile
 from .doctor import run_doctor
 from .errors import BridgeError
 from .modes import RUN_MODES
-from .margin_reference import refresh_margin_reference
+from .margin_reference import migrate_margin_policy, refresh_margin_reference
 from .worker import build_runtime, main as worker_main
 
 
@@ -38,6 +38,8 @@ def main(argv=None):
     margin = sub.add_parser("refresh-margin-reference", help="refresh the local 9qihuo margin and commission CSV")
     margin.add_argument("--source-csv", help="import an existing 9qihuo-format CSV instead of accessing the network")
     margin.add_argument("--if-due", action="store_true", help="skip network refresh when today's signed file is still fresh")
+    migrate = sub.add_parser("migrate-margin-policy", help="explicitly migrate local margin risk policy")
+    migrate.add_argument("--confirm", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -55,6 +57,8 @@ def main(argv=None):
             result = sign_profile(args.config, args.account_alias, args.confirm)
         elif args.command == "refresh-margin-reference":
             result = refresh_margin_reference(args.config, args.source_csv, args.if_due)
+        elif args.command == "migrate-margin-policy":
+            result = migrate_margin_policy(args.config, args.confirm)
         elif args.command == "start":
             set_mode(args.config, args.mode, args.confirm)
             worker_args = ["--config", args.config] if args.config else []
@@ -67,7 +71,7 @@ def main(argv=None):
         return 0 if result.get("ok", True) else 2
     except BridgeError as exc:
         print(json.dumps({"ok": False, "error": {"code": exc.code, "message": exc.message, "details": exc.details}}, ensure_ascii=False), file=sys.stderr)
-        return 2
+        return 3 if exc.code == "MARGIN_POLICY_MIGRATION_REQUIRED" else 2
 
 
 if __name__ == "__main__":

@@ -159,6 +159,15 @@ def run_doctor(config_path=None):
             "adapter=%s age_seconds=%s" % (item.get("adapter_status", "UNKNOWN"), heartbeat_age),
             "warning",
         )
+        add(
+            account.alias + ":margin_policy_heartbeat",
+            item.get("margin_policy_match") is True,
+            "worker_generation=%s adapter_generation=%s" % (
+                item.get("expected_margin_policy_generation"),
+                item.get("margin_policy_generation"),
+            ),
+            "error" if online else "warning",
+        )
     errors = [item for item in checks if not item["ok"] and item["severity"] == "error"]
     warnings = [item for item in checks if not item["ok"] and item["severity"] == "warning"]
     return {"ok": not errors, "errors": len(errors), "warnings": len(warnings), "checks": checks, "health": health}

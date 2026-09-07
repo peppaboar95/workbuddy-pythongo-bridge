@@ -1,4 +1,4 @@
-# WorkBuddy-PythonGO Bridge 0.3.3 操作手册
+# WorkBuddy-PythonGO Bridge 0.3.4 操作手册
 
 这是 WorkBuddy 与无限易 PythonGO v2 之间的本机期货桥接。本文按实际操作顺序说明首次安装、观察模式验收、P0 Profile、模式切换和 `LIMITED_AUTO` 许可。
 
@@ -105,7 +105,7 @@ C:\WorkBuddyPythonGO\
 2. 当日签名的本地 `保证金手续费.csv`，开仓资金校验使用其中的“保证金-每手”；
 3. 两者都不可用时保持保证金数据为空，开仓 Preview 继续以 `MARGIN_RATIO_MISSING` 失败关闭。
 
-桌面 `启动PythonGO桥接.cmd` 每次启动会先静默执行一次 `--if-due` 检查；当天文件有效且数据未过期时不访问网络，否则使用 Python 标准库下载并解析九期网电脑版页面 `https://www.9qihuo.com/qihuoshouxufei` 的完整保证金手续费表。下载限制为 HTTPS、九期网域名、60 秒和 8 MiB，并要求六家期货交易所及至少 500 条有效合约记录。正常刷新或跳过时不显示 CSV 加载过程和结果 JSON，只有刷新失败才显示一行简短警告。安装或升级不再创建独立的保证金更新入口；发现旧入口时会改名为带时间戳的 `.bak` 备份。需要人工查看完整结果或强制刷新时仍可运行下面的管理命令。
+桌面 `启动PythonGO桥接.cmd` 每次启动会先静默执行一次 `--if-due` 检查；当天文件有效且数据未过期时不访问网络，否则使用 Python 标准库下载并解析九期网电脑版页面 `https://www.9qihuo.com/qihuoshouxufei` 的完整保证金手续费表。下载限制为 HTTPS、九期网域名、60 秒和 8 MiB，并要求六家期货交易所及至少 500 条有效合约记录。正常刷新或跳过时不显示 CSV 加载过程和结果 JSON，普通刷新失败只显示一行简短警告。安装或升级不再创建独立的保证金更新入口；发现旧入口时会改名为带时间戳的 `.bak` 备份。需要人工查看完整结果或强制刷新时仍可运行下面的管理命令。
 
 命令行强制更新：
 
@@ -120,9 +120,18 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig refresh-margin-refer
   --source-csv "C:\Users\你的用户名\Desktop\量化交易\期货\保证金手续费.csv"
 ```
 
-刷新器会校验必要列、交易所、完整合约代码、买/卖保证金比例、每手保证金和开仓/平昨/平今手续费列，读取源页面时间用于告警，剔除重复合约，然后原子写入 CSV；旁边的 `.meta.json` 绑定 CSV 的 SHA-256、来源、本机刷新时间和 HMAC 签名。`margin_reference_refresh_max_age_hours` 是本机刷新硬门禁，默认 36 小时；过期、签名失败、哈希不一致或精确合约不匹配时不会启用回退值。九期网页面的“手续费更新时间”只按独立的 `margin_reference_source_warn_age_hours` 生成软告警，默认 168 小时；该时间过旧、缺失或无法解析都不会单独阻止使用已签名且本机刷新有效的保证金数据。
+刷新器会校验必要列、交易所、完整合约代码、买/卖保证金比例、每手保证金和开仓/平昨/平今手续费列，读取源页面时间用于告警，剔除重复合约，然后原子写入 CSV；旁边的 `.meta.json` 绑定 CSV 的 SHA-256、来源、本机刷新时间和 HMAC 签名。日常刷新只更新这两个参考数据文件，**不会修改 Adapter 配置、Profile、运行模式、熔断或授权状态**。新 CSV 的哈希和数值会进入后续 Preview 风险指纹，因此旧 Preview 不能借用新数据提交。
 
-旧运行目录首次迁移时效字段，或从旧数据格式迁移到 `margin_reference_schema_version=2` 的九期网每手保证金格式时，刷新命令会先触发 Worker 与 Adapter 本地熔断，并把旧 Profile 重置为未验证；原 `margin_reference_max_age_hours` 的值会保留为新的本机刷新硬阈值。更新并部署新版 Adapter 后，必须在目标环境复核 P0、重新签名 Profile，再按正常流程解除熔断。每项迁移只触发一次，后续每日更新 CSV 不会反复重置 Profile。
+`margin_reference_refresh_max_age_hours` 是本机刷新硬门禁，默认 36 小时；过期、签名失败、哈希不一致或精确合约不匹配时不会启用回退值。九期网页面的“手续费更新时间”只按独立的 `margin_reference_source_warn_age_hours` 生成软告警，默认 168 小时；该时间过旧、缺失或无法解析都不会单独阻止使用已签名且本机刷新有效的保证金数据。
+
+v0.3.4 为保证金策略增加独立代次和哈希。旧运行目录缺少这些字段时，日常刷新和 Worker 启动会以 `MARGIN_POLICY_MIGRATION_REQUIRED` 停止，不会暗中迁移。运行：
+
+```powershell
+python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-policy `
+  --confirm MIGRATE-MARGIN-POLICY
+```
+
+仅补齐代次/哈希属于跟踪字段迁移，不触发熔断。旧时效字段、Schema、参考文件路径、安全系数或验签要求发生实质变化时，迁移会触发 Worker 与 Adapter 本地熔断、撤销短时授权与自动许可，并使未消费 Preview 失效。两类迁移都保留原 Profile 及其签名，因为 Profile 证明的是目标客户端、账号、构建和交易映射，并不证明每日参考数据或本地保证金策略。迁移后需完整重启无限易，使 Adapter 加载相同的策略代次和哈希；实质变化还应复核新策略与开仓 Preview，再按正常流程解除熔断。不要仅因保证金策略迁移而重签 Profile。
 
 本地表不是券商结算参数。用于开仓估算时，按参考策略的方式使用“保证金-每手 × 手数”，再乘默认 `1.25` 安全系数；买/卖保证金比例仍保留在风险指纹中供审计。CSV 中的开仓、平昨、平今手续费列会完整保留，实际手续费仍以无限易账户快照的 `commission` 为准，第三方数值不用于放宽任何风控。九期网数据不能替代券商或交易所正式通知。
 
@@ -141,7 +150,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig refresh-margin-refer
 
 配置、Profile 和模式变化时无需再复制 JSON，但 Adapter 只在初始化时加载它们，仍应完整退出并重启无限易。覆盖 Python 文件后只停止并重新运行策略可能继续使用旧模块缓存，源码更新同样必须完整重启。
 
-从旧版本升级到本地保证金回退版本属于风险逻辑变化。更新 Adapter 后应保持 `OBSERVE_ONLY + LOCAL_HALT`，重新完成相关开仓 Preview/P0 复核并重签 Profile；不要沿用升级前的验收结论直接进入非观察模式。
+从旧版本升级到 v0.3.4 后先运行上面的显式保证金策略迁移，再完整重启无限易。若结果显示 `material_change=true`，应保持本地熔断，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次迁移重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
 
 ## 5. 第一次启动：只使用 OBSERVE_ONLY
 
@@ -149,7 +158,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig refresh-margin-refer
 
 ### 5.1 使用桌面入口
 
-双击 `启动PythonGO桥接.cmd`。启动器会先静默尝试更新当日签名保证金表，不显示 CSV 加载过程或成功结果；更新失败只显示一行警告，不会绕过风控。随后菜单出现：
+双击 `启动PythonGO桥接.cmd`。启动器会先静默尝试更新当日签名保证金表，不显示 CSV 加载过程或成功结果；普通更新失败只显示一行警告，不会绕过风控。若检测到旧保证金策略配置，启动器会明确显示迁移命令并停止，不会继续进入模式菜单。
 
 ```text
 1. OBSERVE_ONLY
@@ -499,6 +508,10 @@ WorkBuddy 也可以调用 `halt_trading`。只有本机 Console 能解除熔断�
 
 正常启动 Worker 只会撤销短时授权，不会重新开启耐久本地熔断。先查看状态中的熔断原因；如果是 `account binding changed by local console`，说明之前重复绑定了账号。确认账号、Profile 和 Adapter 后只需解除一次熔断，以后使用“启动PythonGO桥接.cmd”日常启动。已绑定的首次向导不再提供重复绑定入口。
 
+### 启动器提示 `MARGIN_POLICY_MIGRATION_REQUIRED`
+
+这是 v0.3.4 对旧保证金策略配置的显式升级门禁，不是 CSV 下载失败。按提示运行 `migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY`，检查输出中的 `material_change`，然后完整重启无限易。迁移不会重置或重签 Profile；如果实质策略发生变化，本地熔断会保持开启，需复核策略和 Preview 后再解除。
+
 ### 菜单显示“本地熔断尚未解除”
 
 不要在受阻提示处输入模式名称。按 Enter 返回菜单或输入 `Q` 退出。先完成 Profile、Adapter 和对账检查，再按第 6.5 节解除熔断。
@@ -534,6 +547,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig set-mode OBSERVE_ONL
 - `AUTO_ADAPTER_MODE_MISMATCH`：确认定位文件指向当前 ready 配置并完整重启无限易；
 - `AUTO_PROFILE_INVALID`：核对签名 Profile 和正在运行的 Adapter；
 - `AUTO_ADAPTER_PROTOCOL_MISMATCH`：无限易中仍在运行旧 Adapter 源码。
+- `AUTO_MARGIN_POLICY_MISMATCH`：Worker 与当前 Adapter 加载的保证金策略代次或哈希不同，完整重启无限易并检查 ready 配置。
 
 ### 重启后许可消失
 

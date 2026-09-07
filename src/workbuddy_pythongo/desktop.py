@@ -103,7 +103,9 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
             + "echo.\r\n"
             + manager_command
             + " refresh-margin-reference --if-due >nul 2>&1\r\n"
-            + "if errorlevel 1 echo [WARNING] Margin refresh failed. Opening trades will remain fail-closed if InfiniTrader also omits the ratio.\r\n"
+            + "set \"MARGIN_REFRESH_EXIT=%ERRORLEVEL%\"\r\n"
+            + "if \"%MARGIN_REFRESH_EXIT%\"==\"3\" goto margin_policy_migration_required\r\n"
+            + "if not \"%MARGIN_REFRESH_EXIT%\"==\"0\" echo [WARNING] Margin refresh failed. Opening trades will remain fail-closed if InfiniTrader also omits the ratio.\r\n"
             + "echo.\r\n"
             + command
             + " start\r\n"
@@ -112,6 +114,18 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
             + "if not \"%EXIT_CODE%\"==\"0\" echo The bridge did not exit normally. Run the status shortcut for automatic diagnostics.\r\n"
             + "pause\r\n"
             + "exit /b %EXIT_CODE%\r\n"
+            + ":margin_policy_migration_required\r\n"
+            + "echo.\r\n"
+            + "echo [BLOCKED] Margin policy configuration requires explicit migration.\r\n"
+            + "echo Run this command, review its result, then start the bridge again:\r\n"
+            + "echo.\r\n"
+            + "echo "
+            + manager_command
+            + " migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY\r\n"
+            + "echo.\r\n"
+            + "echo A material policy change keeps Profile signatures intact but activates the local halt for review.\r\n"
+            + "pause\r\n"
+            + "exit /b 3\r\n"
         ),
         "查看PythonGO桥接状态.cmd": (
             prefix

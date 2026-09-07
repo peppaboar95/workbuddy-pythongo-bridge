@@ -110,7 +110,20 @@ MARGIN_REFERENCE_DEFAULTS = {
     "margin_reference_safety_multiplier": 1.25,
     "margin_reference_require_signature": True,
 }
-CONFIG_FIELDS = BASE_CONFIG_FIELDS | set(AUTO_CONFIG_DEFAULTS) | set(MARGIN_REFERENCE_DEFAULTS)
+MARGIN_POLICY_MATERIAL_FIELDS = (
+    "margin_reference_file",
+    "margin_reference_schema_version",
+    "margin_reference_refresh_max_age_hours",
+    "margin_reference_safety_multiplier",
+    "margin_reference_require_signature",
+)
+MARGIN_POLICY_TRACKING_FIELDS = {
+    "margin_reference_policy_generation", "margin_reference_policy_hash",
+}
+CONFIG_FIELDS = (
+    BASE_CONFIG_FIELDS | set(AUTO_CONFIG_DEFAULTS) |
+    set(MARGIN_REFERENCE_DEFAULTS) | MARGIN_POLICY_TRACKING_FIELDS
+)
 LEGACY_MARGIN_REFERENCE_FIELDS = {"margin_reference_max_age_hours"}
 MARGIN_REFERENCE_FIELDS = {
     "交易所名称", "合约代码", "保证金-买", "保证金-卖", "保证金-每手",
@@ -184,6 +197,11 @@ def _parse_time(value):
 
 def _canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _margin_policy_hash(config):
+    material = {name: config[name] for name in MARGIN_POLICY_MATERIAL_FIELDS}
+    return hashlib.sha256(_canonical(material)).hexdigest()
 
 
 def _atomic_json(path, value):
@@ -327,15 +345,13 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             set(config) - (CONFIG_FIELDS | LEGACY_MARGIN_REFERENCE_FIELDS)
         ):
             raise RuntimeError("adapter config fields do not match the P1 schema")
-        legacy_max_age = config.pop("margin_reference_max_age_hours", None)
-        if "margin_reference_refresh_max_age_hours" not in config and legacy_max_age is not None:
-            config["margin_reference_refresh_max_age_hours"] = legacy_max_age
-        if "margin_reference_source_warn_age_hours" not in config and legacy_max_age is not None:
-            config["margin_reference_source_warn_age_hours"] = max(168, legacy_max_age) if isinstance(legacy_max_age, int) and not isinstance(legacy_max_age, bool) else 168
         for name, value in AUTO_CONFIG_DEFAULTS.items():
             config.setdefault(name, value)
-        for name, value in MARGIN_REFERENCE_DEFAULTS.items():
-            config.setdefault(name, value)
+        missing_margin_fields = (set(MARGIN_REFERENCE_DEFAULTS) | MARGIN_POLICY_TRACKING_FIELDS) - set(config)
+        if LEGACY_MARGIN_REFERENCE_FIELDS & set(config) or missing_margin_fields:
+            raise RuntimeError(
+                "margin policy migration required; run the Manager migrate-margin-policy command"
+            )
         if config["account_type"] != "FUTURES" or config["pythongo_mode"] not in RUN_MODES:
             raise RuntimeError("invalid account type or mode")
         if config["command_dispatch_mode"] not in ("TICK_DISPATCH", "TIMER_DISPATCH"):
@@ -354,8 +370,8 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
                 raise RuntimeError("invalid integer config: " + name)
         if not isinstance(config["allow_cancel_while_halted"], bool):
             raise RuntimeError("allow_cancel_while_halted must be a boolean")
-        if not isinstance(config["margin_reference_file"], str):
-            raise RuntimeError("margin_reference_file must be a string")
+        if not isinstance(config["margin_reference_file"], str) or not os.path.isabs(config["margin_reference_file"]):
+            raise RuntimeError("margin_reference_file must be an absolute path")
         if not isinstance(config["margin_reference_require_signature"], bool):
             raise RuntimeError("margin_reference_require_signature must be a boolean")
         if config["margin_reference_schema_version"] != 2:
@@ -370,6 +386,12 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             not 1.0 <= float(config["margin_reference_safety_multiplier"]) <= 2.0
         ):
             raise RuntimeError("margin_reference_safety_multiplier must be 1.0-2.0")
+        generation = config["margin_reference_policy_generation"]
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
+            raise RuntimeError("margin_reference_policy_generation must be a positive integer")
+        policy_hash = config["margin_reference_policy_hash"]
+        if not isinstance(policy_hash, str) or not hmac.compare_digest(policy_hash, _margin_policy_hash(config)):
+            raise RuntimeError("margin_reference_policy_hash mismatch; explicit migration required")
         self._config = config
         raw = _load_json(config["key_file"])
         if not isinstance(raw, dict) or set(raw) != {"active_key_id", "keys"}:
@@ -1688,6 +1710,8 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             "local_halt": self._local_halted(),
             "limited_auto_protocol": 1,
             "limited_auto_local_pause": bool(self._active_auto_pause()),
+            "margin_policy_generation": self._config["margin_reference_policy_generation"],
+            "margin_policy_hash": self._config["margin_reference_policy_hash"],
             "last_command_scan_at": dt.datetime.fromtimestamp(self._last_scan_at, dt.timezone.utc).isoformat() if self._last_scan_at else None,
             "occurred_at": _iso(),
         }

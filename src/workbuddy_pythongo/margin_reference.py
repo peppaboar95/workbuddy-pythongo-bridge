@@ -12,8 +12,13 @@ from urllib.request import Request, urlopen
 
 from .config import load_config
 from .errors import BridgeError
+from .margin_policy import (
+    MARGIN_POLICY_MATERIAL_FIELDS,
+    bind_margin_policy,
+    margin_policy_hash,
+)
 from .security import KeyRing
-from .util import atomic_write_bytes, atomic_write_json, iso_now, parse_time, utc_now
+from .util import atomic_write_bytes, atomic_write_json, iso_now, json_text, parse_time, utc_now
 
 
 REQUIRED_COLUMNS = {
@@ -283,11 +288,10 @@ def validate_margin_csv(encoded):
     }
 
 
-def _adapter_margin_paths(config):
+def _adapter_margin_policy_plans(config):
     root = os.path.abspath(os.path.join(os.path.dirname(config.path), os.pardir))
-    max_ages = {}
-    updated_adapter_configs = []
     default_path = os.path.join(config.data_dir, "reference", "保证金手续费.csv")
+    plans = []
     for account in config.accounts.values():
         if not account.enabled:
             continue
@@ -297,10 +301,16 @@ def _adapter_margin_paths(config):
                 adapter = json.load(stream)
         except (OSError, ValueError) as exc:
             raise BridgeError("MARGIN_REFERENCE_CONFIG_ERROR", "无法读取Adapter配置：%s" % exc) from exc
-        changed = False
-        legacy_max_age = adapter.pop("margin_reference_max_age_hours", None)
+        if not isinstance(adapter, dict):
+            raise BridgeError("MARGIN_REFERENCE_CONFIG_ERROR", "Adapter配置必须是JSON对象")
+        original = dict(adapter)
+        proposed = dict(adapter)
+        changed_fields = []
+        material_changed = False
+        legacy_max_age = proposed.pop("margin_reference_max_age_hours", None)
         if legacy_max_age is not None:
-            changed = True
+            changed_fields.append("margin_reference_max_age_hours")
+            material_changed = True
         defaults = {
             "margin_reference_file": default_path,
             "margin_reference_schema_version": MARGIN_REFERENCE_SCHEMA_VERSION,
@@ -310,19 +320,28 @@ def _adapter_margin_paths(config):
             "margin_reference_require_signature": True,
         }
         for name, value in defaults.items():
-            if name not in adapter or (name == "margin_reference_file" and not str(adapter.get(name) or "").strip()):
-                adapter[name] = value
-                changed = True
-        if adapter.get("margin_reference_schema_version") != MARGIN_REFERENCE_SCHEMA_VERSION:
-            adapter["margin_reference_schema_version"] = MARGIN_REFERENCE_SCHEMA_VERSION
-            changed = True
-        if changed:
-            atomic_write_json(adapter_path, adapter)
-            updated_adapter_configs.append(adapter_path)
-        path = str(adapter["margin_reference_file"]).strip()
+            if name not in proposed or (name == "margin_reference_file" and not str(proposed.get(name) or "").strip()):
+                proposed[name] = value
+                changed_fields.append(name)
+                if name in MARGIN_POLICY_MATERIAL_FIELDS:
+                    material_changed = True
+        if proposed.get("margin_reference_schema_version") != MARGIN_REFERENCE_SCHEMA_VERSION:
+            proposed["margin_reference_schema_version"] = MARGIN_REFERENCE_SCHEMA_VERSION
+            if "margin_reference_schema_version" not in changed_fields:
+                changed_fields.append("margin_reference_schema_version")
+            material_changed = True
+
+        path = str(proposed["margin_reference_file"]).strip()
+        if not path:
+            raise BridgeError("MARGIN_REFERENCE_CONFIG_ERROR", "margin_reference_file不能为空")
         absolute = os.path.abspath(os.path.expandvars(path))
-        configured_age = adapter["margin_reference_refresh_max_age_hours"]
-        source_warn_age = adapter["margin_reference_source_warn_age_hours"]
+        proposed["margin_reference_file"] = absolute
+        if original.get("margin_reference_file") != absolute:
+            if "margin_reference_file" not in changed_fields:
+                changed_fields.append("margin_reference_file")
+            material_changed = True
+        configured_age = proposed["margin_reference_refresh_max_age_hours"]
+        source_warn_age = proposed["margin_reference_source_warn_age_hours"]
         if isinstance(configured_age, bool) or not isinstance(configured_age, int) or not 1 <= configured_age <= 168:
             raise BridgeError(
                 "MARGIN_REFERENCE_CONFIG_ERROR",
@@ -333,10 +352,234 @@ def _adapter_margin_paths(config):
                 "MARGIN_REFERENCE_CONFIG_ERROR",
                 "margin_reference_source_warn_age_hours必须是1至8760的整数",
             )
-        max_ages[absolute] = min(configured_age, max_ages.get(absolute, configured_age))
-    if not max_ages:
+        safety_multiplier = proposed["margin_reference_safety_multiplier"]
+        if (
+            isinstance(safety_multiplier, bool)
+            or not isinstance(safety_multiplier, (int, float))
+            or not math.isfinite(float(safety_multiplier))
+            or not 1.0 <= float(safety_multiplier) <= 2.0
+        ):
+            raise BridgeError(
+                "MARGIN_REFERENCE_CONFIG_ERROR",
+                "margin_reference_safety_multiplier必须是1.0至2.0的有限数值",
+            )
+        if not isinstance(proposed["margin_reference_require_signature"], bool):
+            raise BridgeError(
+                "MARGIN_REFERENCE_CONFIG_ERROR",
+                "margin_reference_require_signature必须是布尔值",
+            )
+
+        existing_generation = proposed.get("margin_reference_policy_generation")
+        if isinstance(existing_generation, bool) or not isinstance(existing_generation, int) or existing_generation < 1:
+            existing_generation = 0
+            changed_fields.append("margin_reference_policy_generation")
+        expected_hash = margin_policy_hash(proposed)
+        existing_hash = proposed.get("margin_reference_policy_hash")
+        if existing_hash != expected_hash:
+            if isinstance(existing_hash, str) and existing_hash:
+                material_changed = True
+            changed_fields.append("margin_reference_policy_hash")
+        generation = existing_generation + 1 if material_changed and existing_generation else max(1, existing_generation)
+        proposed = bind_margin_policy(proposed, generation)
+        if original.get("margin_reference_policy_generation") != generation:
+            if "margin_reference_policy_generation" not in changed_fields:
+                changed_fields.append("margin_reference_policy_generation")
+        plans.append({
+            "account_alias": account.alias,
+            "adapter_path": adapter_path,
+            "original": original,
+            "proposed": proposed,
+            "changed_fields": sorted(set(changed_fields)),
+            "material_changed": material_changed,
+            "path": absolute,
+            "max_age_hours": configured_age,
+            "policy_generation": proposed["margin_reference_policy_generation"],
+            "policy_hash": proposed["margin_reference_policy_hash"],
+        })
+    if not plans:
         raise BridgeError("MARGIN_REFERENCE_CONFIG_ERROR", "没有启用账户的保证金文件路径")
-    return max_ages, updated_adapter_configs
+    return plans
+
+
+def _migration_required(plans):
+    pending = [plan for plan in plans if plan["changed_fields"]]
+    if not pending:
+        return
+    raise BridgeError(
+        "MARGIN_POLICY_MIGRATION_REQUIRED",
+        "保证金策略配置需要显式迁移；日常数据刷新不会修改配置、Profile或熔断状态",
+        {
+            "command": "migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY",
+            "accounts": [
+                {
+                    "account_alias": plan["account_alias"],
+                    "changed_fields": plan["changed_fields"],
+                    "material_change": plan["material_changed"],
+                }
+                for plan in pending
+            ],
+        },
+    )
+
+
+def _adapter_margin_paths(config):
+    plans = _adapter_margin_policy_plans(config)
+    _migration_required(plans)
+    max_ages = {}
+    for plan in plans:
+        path = plan["path"]
+        age = plan["max_age_hours"]
+        max_ages[path] = min(age, max_ages.get(path, age))
+    return max_ages, plans
+
+
+def ensure_margin_policy_state(config, database):
+    plans = _adapter_margin_policy_plans(config)
+    _migration_required(plans)
+    now = iso_now()
+    with database.transaction(immediate=True) as connection:
+        for plan in plans:
+            alias = plan["account_alias"]
+            expected = {
+                "margin_policy_generation:%s" % alias: str(plan["policy_generation"]),
+                "margin_policy_hash:%s" % alias: plan["policy_hash"],
+            }
+            for key, value in expected.items():
+                row = connection.execute("SELECT value FROM system_state WHERE key=?", (key,)).fetchone()
+                if row and row["value"] != value:
+                    raise BridgeError(
+                        "MARGIN_POLICY_MIGRATION_REQUIRED",
+                        "保证金策略与Worker已记录代次不一致，需要显式迁移",
+                        {"account_alias": alias, "command": "migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY"},
+                    )
+                connection.execute(
+                    "INSERT OR IGNORE INTO system_state(key,value,updated_at) VALUES(?,?,?)",
+                    (key, value, now),
+                )
+    return plans
+
+
+def migrate_margin_policy(config_path, confirm):
+    if confirm != "MIGRATE-MARGIN-POLICY":
+        raise BridgeError(
+            "CONFIRMATION_REQUIRED",
+            "--confirm必须完整等于MIGRATE-MARGIN-POLICY",
+        )
+    config = load_config(config_path)
+    plans = _adapter_margin_policy_plans(config)
+
+    from .worker import build_runtime
+
+    _, database, core = build_runtime(config.path, require_margin_policy=False)
+    with database.connect() as connection:
+        for plan in plans:
+            alias = plan["account_alias"]
+            stored_hash = connection.execute(
+                "SELECT value FROM system_state WHERE key=?",
+                ("margin_policy_hash:%s" % alias,),
+            ).fetchone()
+            stored_generation = connection.execute(
+                "SELECT value FROM system_state WHERE key=?",
+                ("margin_policy_generation:%s" % alias,),
+            ).fetchone()
+            try:
+                prior_generation = int(stored_generation["value"]) if stored_generation else 0
+            except (TypeError, ValueError):
+                prior_generation = 0
+            if stored_hash and stored_hash["value"] != plan["policy_hash"]:
+                generation = max(prior_generation + 1, plan["policy_generation"])
+                plan["proposed"] = bind_margin_policy(plan["proposed"], generation)
+                plan["policy_generation"] = generation
+                plan["policy_hash"] = plan["proposed"]["margin_reference_policy_hash"]
+                plan["material_changed"] = True
+                plan["changed_fields"] = sorted(set(plan["changed_fields"] + [
+                    "margin_reference_policy_generation",
+                    "margin_reference_policy_hash",
+                ]))
+            elif stored_generation and prior_generation != plan["policy_generation"]:
+                generation = max(prior_generation, plan["policy_generation"])
+                plan["proposed"] = bind_margin_policy(plan["proposed"], generation)
+                plan["policy_generation"] = generation
+                plan["policy_hash"] = plan["proposed"]["margin_reference_policy_hash"]
+                if plan["original"].get("margin_reference_policy_generation") != generation:
+                    plan["changed_fields"] = sorted(set(plan["changed_fields"] + [
+                        "margin_reference_policy_generation",
+                    ]))
+
+    changed_plans = [plan for plan in plans if plan["changed_fields"]]
+    material_change = any(plan["material_changed"] for plan in plans)
+    halt_result = None
+    if material_change:
+        halt_result = core.halt_trading("local margin policy changed; explicit review required")
+        if halt_result.get("adapter_file_failures"):
+            raise BridgeError(
+                "HALT_FILE_FAILED",
+                "保证金策略迁移时无法写入全部Adapter熔断文件",
+                {"failures": halt_result["adapter_file_failures"]},
+            )
+
+    for plan in changed_plans:
+        atomic_write_json(plan["adapter_path"], plan["proposed"])
+
+    now = iso_now()
+    expired_previews = 0
+    with database.transaction(immediate=True) as connection:
+        if material_change:
+            expired_previews = connection.execute(
+                "UPDATE trade_previews SET expires_at=? WHERE consumed_intent_id IS NULL AND expires_at>?",
+                (now, now),
+            ).rowcount
+        for plan in plans:
+            alias = plan["account_alias"]
+            for key, value in (
+                ("margin_policy_generation:%s" % alias, str(plan["policy_generation"])),
+                ("margin_policy_hash:%s" % alias, plan["policy_hash"]),
+            ):
+                connection.execute(
+                    "INSERT INTO system_state(key,value,updated_at) VALUES(?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+                    (key, value, now),
+                )
+        connection.execute(
+            "INSERT INTO audit_log(occurred_at,actor,action,details_json) VALUES(?,?,?,?)",
+            (
+                now,
+                "local-console",
+                "MIGRATE_MARGIN_POLICY",
+                json_text({
+                    "material_change": material_change,
+                    "expired_previews": expired_previews,
+                    "profiles_preserved": True,
+                    "accounts": [
+                        {
+                            "account_alias": plan["account_alias"],
+                            "generation": plan["policy_generation"],
+                            "policy_hash": plan["policy_hash"],
+                            "changed_fields": plan["changed_fields"],
+                        }
+                        for plan in plans
+                    ],
+                }),
+            ),
+        )
+    return {
+        "ok": True,
+        "migrated": bool(changed_plans),
+        "material_change": material_change,
+        "halted_for_policy_change": bool(halt_result),
+        "expired_previews": expired_previews,
+        "profiles_preserved": True,
+        "accounts": [
+            {
+                "account_alias": plan["account_alias"],
+                "adapter_path": plan["adapter_path"],
+                "changed_fields": plan["changed_fields"],
+                "policy_generation": plan["policy_generation"],
+                "policy_hash": plan["policy_hash"],
+            }
+            for plan in plans
+        ],
+    }
 
 
 def _fetch_9qihuo_csv():
@@ -394,40 +637,17 @@ def _reference_is_fresh(path, keyring, max_age_hours=36):
 
 def refresh_margin_reference(config_path, source_csv=None, if_due=False):
     config = load_config(config_path)
-    max_ages, updated_adapter_configs = _adapter_margin_paths(config)
+    max_ages, policy_plans = _adapter_margin_paths(config)
     paths = list(max_ages)
     keyring = KeyRing.load(config.key_file)
-    reset_profiles = []
-    halt_result = None
-    if updated_adapter_configs:
-        # Activating or changing local risk-data policy changes accepted execution inputs.
-        # Halt both ends first, then invalidate the old P0 attestation.
-        from .worker import build_runtime
-
-        _, _, core = build_runtime(config.path)
-        halt_result = core.halt_trading("local margin reference policy changed; P0 revalidation required")
-        if halt_result.get("adapter_file_failures"):
-            raise BridgeError(
-                "HALT_FILE_FAILED",
-                "启用本地保证金回退时无法写入全部Adapter熔断文件",
-                {"failures": halt_result["adapter_file_failures"]},
-            )
-        for adapter_path in updated_adapter_configs:
-            try:
-                with open(adapter_path, "r", encoding="utf-8") as stream:
-                    adapter = json.load(stream)
-                profile_path = os.path.abspath(os.path.expandvars(str(adapter["mapping_profile"])))
-                with open(profile_path, "r", encoding="utf-8") as stream:
-                    profile = json.load(stream)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                raise BridgeError(
-                    "MARGIN_REFERENCE_CONFIG_ERROR",
-                    "无法在风险逻辑升级后重置Profile：%s" % exc,
-                ) from exc
-            profile["verified"] = False
-            profile["signature"] = ""
-            atomic_write_json(profile_path, profile)
-            reset_profiles.append(profile_path)
+    policies = [
+        {
+            "account_alias": plan["account_alias"],
+            "policy_generation": plan["policy_generation"],
+            "policy_hash": plan["policy_hash"],
+        }
+        for plan in policy_plans
+    ]
     if if_due and not source_csv and all(
         _reference_is_fresh(path, keyring, max_ages[path]) for path in paths
     ):
@@ -436,9 +656,8 @@ def refresh_margin_reference(config_path, source_csv=None, if_due=False):
             "skipped": True,
             "reason": "signed local reference is valid and already refreshed today",
             "paths": paths,
-            "updated_adapter_configs": updated_adapter_configs,
-            "reset_profiles": reset_profiles,
-            "halted_for_upgrade": bool(halt_result),
+            "profiles_preserved": True,
+            "policies": policies,
         }
     if source_csv:
         source_csv = os.path.abspath(os.path.expandvars(source_csv))
@@ -475,8 +694,7 @@ def refresh_margin_reference(config_path, source_csv=None, if_due=False):
         "refreshed_at": refreshed_at,
         "csv_sha256": digest,
         "paths": paths,
-        "updated_adapter_configs": updated_adapter_configs,
-        "reset_profiles": reset_profiles,
-        "halted_for_upgrade": bool(halt_result),
+        "profiles_preserved": True,
+        "policies": policies,
         **summary,
     }

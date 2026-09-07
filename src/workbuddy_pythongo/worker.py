@@ -17,17 +17,20 @@ from .db import Database
 from .errors import BridgeError
 from .event_ingest import EventIngester
 from .file_queue import FileQueue
+from .margin_reference import ensure_margin_policy_state
 from .reconciliation import Reconciler
 from .security import KeyRing
 from .util import iso_now, json_text, new_id, strict_json_loads, utc_now
 
 
-def build_runtime(config_path=None):
+def build_runtime(config_path=None, require_margin_policy=True):
     config = load_config(config_path)
     if not ipaddress.ip_address(config.host).is_loopback:
         raise BridgeError("CONFIG_ERROR", "worker must bind to a loopback address")
     database = Database(os.path.join(config.data_dir, "state", "bridge.db"))
     database.initialize(config.default_mode)
+    if require_margin_policy:
+        ensure_margin_policy_state(config, database)
     keyring = KeyRing.load(config.key_file)
     queue = FileQueue(config.data_dir, keyring, config.max_message_bytes)
     for account in config.accounts.values():

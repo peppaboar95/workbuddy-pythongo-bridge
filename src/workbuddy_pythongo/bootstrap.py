@@ -6,6 +6,7 @@ import secrets
 import sys
 from importlib import resources
 
+from .margin_policy import bind_margin_policy
 from .util import atomic_write_bytes, atomic_write_json
 
 
@@ -79,7 +80,7 @@ def _adapter_config(root):
     data_dir = os.path.abspath(os.path.join(root, "data"))
     ready = os.path.abspath(os.path.join(root, "pythongo_ready", DEFAULT_ADAPTER))
     limits = _risk_limits()
-    return {
+    adapter = {
         "account_alias": DEFAULT_ALIAS,
         "account_type": "FUTURES",
         "adapter_instance": DEFAULT_ADAPTER,
@@ -120,6 +121,7 @@ def _adapter_config(root):
         "margin_reference_safety_multiplier": 1.25,
         "margin_reference_require_signature": True,
     }
+    return bind_margin_policy(adapter, 1)
 
 
 def _profile():
