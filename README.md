@@ -2,7 +2,7 @@
 
 WorkBuddy/MCP 与无限易 PythonGO v2 之间的本机、失败关闭型期货交易桥接器。
 
-> 📖 **在线阅读接口文档**：<https://peppaboar95.github.io/workbuddy-pythongo-bridge/>
+> 📖 **在线阅读接口文档**：<https://peppaboar95.github.io/workbuddy-pythongo-bridge/python-api-reference.html>
 > （31 个 Bridge 方法的参数、响应、错误码、配额与模块 API，侧栏导航 + 深色代码卡）
 
 > **重要风险提示**
@@ -99,11 +99,10 @@ python -m workbuddy_pythongo.desktop setup --root .\runtime
 
 ## 文档
 
-- [Python 接口参考（单文件 HTML）](docs/python-api-reference.html) — 31 个 Bridge 方法的参数、响应、错误码、配额与模块 API
+- [Python 接口参考（单文件 HTML）](https://peppaboar95.github.io/workbuddy-pythongo-bridge/python-api-reference.html) — 31 个 Bridge 方法的参数、响应、错误码、配额与模块 API
 - [中文操作手册](docs/README-RELEASE.zh-CN.md)
 - [设计与安全边界](docs/DESIGN.zh-CN.md)
 - [0.3.3 发布说明](docs/RELEASE-v0.3.3.md)
-- [GitHub 发布检查清单](docs/GITHUB-PUBLISH-CHECKLIST.md)
 - [P0 核对清单](examples/P0-CHECKLIST.zh-CN.md)
 
 ## 许可
