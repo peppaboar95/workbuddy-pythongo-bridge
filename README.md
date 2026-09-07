@@ -2,6 +2,9 @@
 
 WorkBuddy/MCP 与无限易 PythonGO v2 之间的本机、失败关闭型期货交易桥接器。
 
+> 📖 **在线阅读接口文档**：<https://peppaboar95.github.io/workbuddy-pythongo-bridge/>
+> （31 个 Bridge 方法的参数、响应、错误码、配额与模块 API，侧栏导航 + 深色代码卡）
+
 > **重要风险提示**
 >
 > 本项目能够触发模拟或真实资金账户的委托，不构成投资建议，也不保证盈利。默认模式为
