@@ -35,7 +35,6 @@ AUTO_PAUSE_REASONS = {
     "AUTO_ACCOUNT_DRAWDOWN_EXCEEDED", "AUTO_CONSECUTIVE_FAILURE_LIMIT",
 }
 CHINA_TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Shanghai")
-P0_ISOLATED_NOTIONAL_CAPS = {("SHFE", "au2610"): 900000.0}
 P0_ISOLATED_MARGIN_GUARD_RATIO = 0.20
 P0_VALIDATION_NOTIONAL_CAP = 1000000.0
 P0_VALIDATION_LEG_MAPPINGS = {
@@ -186,6 +185,12 @@ class BridgeCore:
         with self.database.connect() as connection:
             mode = self._mode(connection)
             halted = self._halted(connection)
+            halt_reason = self._state(connection, "halt_reason", "")
+            protection_kind = self._state(connection, "trade_protection_kind", "NONE") or "NONE"
+            protection_reason = self._state(connection, "trade_protection_reason", "")
+            if halted and protection_kind == "NONE":
+                protection_kind = "INCIDENT_HALT"
+                protection_reason = halt_reason
             accounts = []
             for account in self.config.accounts.values():
                 if not account.enabled:
@@ -254,14 +259,18 @@ class BridgeCore:
                 "worker": "READY",
                 "mode": mode,
                 "halted": halted,
-                "halt_reason": self._state(connection, "halt_reason", ""),
+                "halt_reason": halt_reason,
                 "accounts": accounts,
                 "unresolved_submit_unknown": unresolved,
                 "observation_ready": observation_ready,
                 "trade_ready": trade_ready,
                 "trade_protection": {
-                    "active": bool(halted or any(item["local_halt"] for item in accounts)),
-                    "reason": self._state(connection, "halt_reason", ""),
+                    "active": bool(
+                        halted or protection_kind != "NONE"
+                        or any(item["local_halt"] for item in accounts)
+                    ),
+                    "kind": protection_kind,
+                    "reason": halt_reason if halted else protection_reason,
                     "queries_available": observation_ready,
                     "blocked_operation": "NEW_TRADES",
                 },
@@ -1549,21 +1558,21 @@ class BridgeCore:
                 isinstance(isolated_notional_cap, bool)
                 or not isinstance(isolated_notional_cap, (int, float))
                 or not math.isfinite(float(isolated_notional_cap))
-                or float(isolated_notional_cap) != P0_ISOLATED_NOTIONAL_CAPS.get((exchange, instrument_id))
+                or float(isolated_notional_cap) <= 0
+                or float(isolated_notional_cap) > P0_VALIDATION_NOTIONAL_CAP
             ):
                 raise BridgeError(
                     "P0_ISOLATED_CAP_REJECTED",
-                    "isolated P0 cap is not authorized for this exact instrument and amount",
+                    "isolated P0 cap must be positive and no greater than the validation ceiling",
                 )
             effective_notional_cap = float(isolated_notional_cap)
         with self.database.connect() as connection:
             mode = self._mode(connection)
-            halted = self._halted(connection)
             heartbeat = connection.execute(
                 "SELECT * FROM heartbeats WHERE adapter_instance=?", (account.adapter_instance,)
             ).fetchone()
-        if mode != "OBSERVE_ONLY" or not halted:
-            raise BridgeError("P0_GATE_FAILED", "P0 probe requires OBSERVE_ONLY with the durable halt enabled")
+        if mode != "OBSERVE_ONLY":
+            raise BridgeError("P0_GATE_FAILED", "P0 probe requires OBSERVE_ONLY")
         if not heartbeat or heartbeat["status"] != "READY" or age_seconds(heartbeat["received_at"]) > 15:
             raise BridgeError("ADAPTER_NOT_READY", "fresh READY heartbeat is required for the P0 probe")
         heartbeat_payload = _payload(heartbeat) or {}
@@ -1685,18 +1694,17 @@ class BridgeCore:
             exchange, instrument_id = normalize_instrument(exchange, instrument_id)
         except ValueError as exc:
             raise ValidationError(str(exc))
-        if (exchange, instrument_id) != ("SHFE", "au2610"):
-            raise BridgeError("P0_VALIDATION_REJECTED", "validation legs are bound to SHFE:au2610")
+        if not account.instrument_allowed(exchange, instrument_id):
+            raise BridgeError("INSTRUMENT_NOT_ALLOWED", "P0 instrument is outside the account allowlist")
         if action not in P0_VALIDATION_LEG_MAPPINGS:
             raise BridgeError("P0_VALIDATION_REJECTED", "unsupported P0 validation action")
         with self.database.connect() as connection:
             mode = self._mode(connection)
-            halted = self._halted(connection)
             heartbeat = connection.execute(
                 "SELECT * FROM heartbeats WHERE adapter_instance=?", (account.adapter_instance,)
             ).fetchone()
-        if mode != "OBSERVE_ONLY" or not halted:
-            raise BridgeError("P0_GATE_FAILED", "P0 validation requires OBSERVE_ONLY with durable halt")
+        if mode != "OBSERVE_ONLY":
+            raise BridgeError("P0_GATE_FAILED", "P0 validation requires OBSERVE_ONLY")
         if not heartbeat or heartbeat["status"] != "READY" or age_seconds(heartbeat["received_at"]) > 15:
             raise BridgeError("ADAPTER_NOT_READY", "fresh READY heartbeat is required")
         heartbeat_payload = _payload(heartbeat) or {}
@@ -1853,13 +1861,17 @@ class BridgeCore:
         sync = self.request_sync(account.alias, ["ACCOUNT", "POSITION", "ORDER", "TRADE"])
         return {"run_id": run_id, "status": "REQUESTED", "sync": sync}
 
-    def halt_trading(self, reason):
+    def _activate_trade_protection(self, reason, kind="INCIDENT_HALT"):
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
             raise ValidationError("reason must contain 1-500 characters")
+        if kind not in {"INCIDENT_HALT", "ACCOUNT_CHANGE", "POLICY_REVIEW"}:
+            raise ValidationError("unsupported trade protection kind")
         now = iso_now()
         with self.database.transaction(immediate=True) as connection:
             self._set_state(connection, "halted", "true", now)
             self._set_state(connection, "halt_reason", reason.strip(), now)
+            self._set_state(connection, "trade_protection_kind", kind, now)
+            self._set_state(connection, "trade_protection_reason", reason.strip(), now)
             connection.execute("DELETE FROM system_state WHERE key LIKE 'manual_session:%'")
             connection.execute("UPDATE system_state SET value=?,updated_at=? WHERE key LIKE 'live_until:%'", (now, now))
             connection.execute("UPDATE approvals SET expires_at=? WHERE used_at IS NULL AND expires_at>?", (now, now))
@@ -1874,7 +1886,7 @@ class BridgeCore:
                 )
             connection.execute(
                 "INSERT INTO audit_log(occurred_at,actor,action,details_json) VALUES(?,?,?,?)",
-                (now, "mcp", "HALT_TRADING", json_text({"reason": reason.strip()})),
+                (now, "mcp", "HALT_TRADING", json_text({"reason": reason.strip(), "kind": kind})),
             )
         failures = []
         for account in self.config.accounts.values():
@@ -1883,7 +1895,13 @@ class BridgeCore:
                     self._write_local_halt(account, True, reason.strip(), "mcp")
                 except Exception as exc:
                     failures.append({"account_alias": account.alias, "error": str(exc)})
-        return {"halted": True, "reason": reason.strip(), "adapter_file_failures": failures}
+        return {
+            "halted": True, "reason": reason.strip(), "trade_protection_kind": kind,
+            "adapter_file_failures": failures,
+        }
+
+    def halt_trading(self, reason):
+        return self._activate_trade_protection(reason, "INCIDENT_HALT")
 
     def dispatch_pending_commands(self, account_alias=None):
         query = "SELECT * FROM adapter_commands WHERE status='PENDING_DELIVERY'"

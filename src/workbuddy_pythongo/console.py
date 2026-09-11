@@ -113,10 +113,21 @@ def get_non_observe_mode_blockers(config_path):
     with database.connect() as connection:
         halted = connection.execute("SELECT value FROM system_state WHERE key='halted'").fetchone()
         halt_reason = connection.execute("SELECT value FROM system_state WHERE key='halt_reason'").fetchone()
+        protection_kind = connection.execute(
+            "SELECT value FROM system_state WHERE key='trade_protection_kind'"
+        ).fetchone()
+        protection_reason = connection.execute(
+            "SELECT value FROM system_state WHERE key='trade_protection_reason'"
+        ).fetchone()
     if halted and halted["value"] == "true":
         blockers.append({
             "code": "TRADING_HALTED",
             "message": (halt_reason["value"] if halt_reason else "") or "local halt is active",
+        })
+    elif protection_kind and protection_kind["value"] != "NONE":
+        blockers.append({
+            "code": "TRADE_PROTECTION_ACTIVE",
+            "message": (protection_reason["value"] if protection_reason else "") or protection_kind["value"],
         })
     return blockers
 
@@ -132,8 +143,17 @@ def set_mode(config_path, mode, confirm=None):
     now = iso_now()
     with database.transaction(immediate=True) as connection:
         halted = connection.execute("SELECT value FROM system_state WHERE key='halted'").fetchone()
+        protection_kind = connection.execute(
+            "SELECT value FROM system_state WHERE key='trade_protection_kind'"
+        ).fetchone()
         if mode != "OBSERVE_ONLY" and halted and halted["value"] == "true":
             raise BridgeError("TRADING_HALTED", "clear the local halt before selecting a non-observe mode")
+        if mode != "OBSERVE_ONLY" and protection_kind and protection_kind["value"] != "NONE":
+            raise BridgeError(
+                "TRADE_PROTECTION_ACTIVE",
+                "clear the local trade protection before selecting a non-observe mode",
+                {"kind": protection_kind["value"]},
+            )
         connection.execute(
             "INSERT INTO system_state(key,value,updated_at) VALUES('mode',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
             (mode, now),
@@ -165,6 +185,8 @@ def clear_halt(config_path, confirm):
     with database.transaction(immediate=True) as connection:
         connection.execute("UPDATE system_state SET value='false',updated_at=? WHERE key='halted'", (now,))
         connection.execute("UPDATE system_state SET value='',updated_at=? WHERE key='halt_reason'", (now,))
+        connection.execute("UPDATE system_state SET value='NONE',updated_at=? WHERE key='trade_protection_kind'", (now,))
+        connection.execute("UPDATE system_state SET value='',updated_at=? WHERE key='trade_protection_reason'", (now,))
         connection.execute("UPDATE system_state SET value='OBSERVE_ONLY',updated_at=? WHERE key='mode'", (now,))
         connection.execute("UPDATE approvals SET used_at=? WHERE used_at IS NULL", (now,))
         connection.execute("DELETE FROM system_state WHERE key LIKE 'manual_session:%'")
@@ -219,21 +241,57 @@ def bind_investor(config_path, alias, investor_id, confirm):
         and adapter.get("investor_fingerprint") == fingerprint
         and keyring.fingerprint_investor(adapter.get("investor_id", "")) == fingerprint
     )
+    initial_binding = "REPLACE" in account.investor_fingerprint.upper()
     _, database, core = build_runtime(config.path)
+    with database.connect() as connection:
+        existing_halted_row = connection.execute(
+            "SELECT value FROM system_state WHERE key='halted'"
+        ).fetchone()
+    existing_halted = bool(existing_halted_row and existing_halted_row["value"] == "true")
+    initial_setup = initial_binding and not existing_halted
     if same_binding:
         with database.connect() as connection:
             halted = connection.execute("SELECT value FROM system_state WHERE key='halted'").fetchone()
+            protection_kind = connection.execute(
+                "SELECT value FROM system_state WHERE key='trade_protection_kind'"
+            ).fetchone()
         return {
             "account_alias": alias,
             "investor_fingerprint_prefix": fingerprint[:24] + "...",
             "binding_changed": False,
             "profile_reset_to_unverified": False,
             "halted": bool(halted and halted["value"] == "true"),
+            "trade_protection_kind": protection_kind["value"] if protection_kind else "NONE",
             "next_step": "binding already matches; no Profile or halt state was changed",
         }
-    halt = core.halt_trading("account binding changed by local console")
-    if halt.get("adapter_file_failures"):
-        raise BridgeError("HALT_FILE_FAILED", "cannot bind account because a local halt file could not be written", {"accounts": [item["account_alias"] for item in halt["adapter_file_failures"]]})
+    if initial_setup:
+        try:
+            core._write_local_halt(account, True, "initial setup: trading is not enabled", "setup")
+        except OSError as exc:
+            raise BridgeError("HALT_FILE_FAILED", "cannot initialize the local trade lock", {"account": alias}) from exc
+        now = iso_now()
+        with database.transaction(immediate=True) as connection:
+            connection.execute("UPDATE system_state SET value='false',updated_at=? WHERE key='halted'", (now,))
+            connection.execute("UPDATE system_state SET value='',updated_at=? WHERE key='halt_reason'", (now,))
+            connection.execute(
+                "UPDATE system_state SET value='SETUP_LOCK',updated_at=? WHERE key='trade_protection_kind'",
+                (now,),
+            )
+            connection.execute(
+                "UPDATE system_state SET value='initial setup: trading is not enabled',updated_at=? "
+                "WHERE key='trade_protection_reason'",
+                (now,),
+            )
+            connection.execute("UPDATE system_state SET value='OBSERVE_ONLY',updated_at=? WHERE key='mode'", (now,))
+            connection.execute(
+                "INSERT INTO audit_log(occurred_at,actor,action,account_alias,details_json) VALUES(?,?,?,?,?)",
+                (now, "local-console", "INITIAL_ACCOUNT_BINDING", alias, json_text({"trade_protection_kind": "SETUP_LOCK"})),
+            )
+        halt = {"halted": False, "trade_protection_kind": "SETUP_LOCK"}
+    else:
+        halt = core._activate_trade_protection("account binding changed by local console", "ACCOUNT_CHANGE")
+        if halt.get("adapter_file_failures"):
+            raise BridgeError("HALT_FILE_FAILED", "cannot bind account because a local halt file could not be written", {"accounts": [item["account_alias"] for item in halt["adapter_file_failures"]]})
     bridge_raw = _read_json(config.path)
     found = False
     for item in bridge_raw["accounts"]:
@@ -257,8 +315,13 @@ def bind_investor(config_path, alias, investor_id, confirm):
         "investor_fingerprint_prefix": fingerprint[:24] + "...",
         "binding_changed": True,
         "profile_reset_to_unverified": True,
-        "halted": True,
-        "next_step": "complete P0, sign the Profile, then clear halt locally",
+        "halted": bool(halt.get("halted")),
+        "trade_protection_kind": halt.get("trade_protection_kind", "ACCOUNT_CHANGE"),
+        "next_step": (
+            "queries are available in OBSERVE_ONLY; enable trading later with P0 and Profile signing"
+            if initial_setup else
+            "review the account change, complete P0 if required, sign the Profile, then clear halt locally"
+        ),
     }
 
 

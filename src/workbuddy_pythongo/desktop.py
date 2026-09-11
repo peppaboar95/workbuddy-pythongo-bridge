@@ -1,6 +1,7 @@
 import argparse
 import ctypes
 import datetime as dt
+import glob
 import json
 import locale
 import os
@@ -33,9 +34,174 @@ START_MODE_DESCRIPTIONS = {
     "LIMITED_AUTO": "P1有限自动；还需要结构化策略许可",
 }
 
+APP_DATA_DIRECTORY = "WorkBuddyPythonGO"
+RUNTIME_POINTER_NAME = "runtime.path"
+DEPLOYMENT_FILENAMES = ("WorkBuddyPythonGOAdapter.py", "pythongo_adapter.path")
+LEGACY_DEPLOYMENT_FILENAMES = ("pythongo_adapter.json", "pythongo_profile.json")
+
+DOCTOR_LABELS = {
+    "bridge_config": "Bridge配置",
+    "message_keyring": "本机消息密钥",
+    "worker_token": "Worker访问令牌",
+    "sqlite": "本机运行数据库",
+    "runtime": "运行环境",
+    "adapter_hash": "Adapter版本",
+    "adapter_config_locator": "Adapter定位文件",
+    "adapter_config_schema": "Adapter配置格式",
+    "identity_binding": "账户与实例绑定",
+    "investor_binding": "投资者账号绑定",
+    "mode_sync": "Worker与Adapter模式",
+    "risk_limit_sync": "双端风险限制",
+    "profile_schema": "交易能力档案格式",
+    "profile_signature": "交易能力档案签名",
+    "profile_p0_binding": "现场验证绑定",
+    "profile_build_binding": "客户端版本绑定",
+    "ready_bundle": "无限易部署包",
+    "heartbeat": "无限易Adapter连接",
+    "margin_policy_heartbeat": "保证金策略同步",
+}
+
+DOCTOR_ACTIONS = {
+    "bridge_config": "重新运行“首次安装与配置.cmd”，并确认运行目录。",
+    "message_keyring": "恢复原runtime备份；不要从其他电脑复制密钥。",
+    "worker_token": "恢复原runtime备份，或在确认不再使用旧环境后新建runtime。",
+    "runtime": "先运行首次配置向导；若提示策略迁移，按屏幕给出的命令复核。",
+    "adapter_hash": "重新运行安装向导，再把新版Adapter部署到无限易策略目录。",
+    "adapter_config_locator": "重新运行安装向导中的“部署到无限易”步骤。",
+    "adapter_config_schema": "恢复配置备份，或重新运行安装向导生成兼容配置。",
+    "identity_binding": "确认选择了正确runtime；账号确实变化时再重新绑定。",
+    "investor_binding": "使用本机绑定命令重新输入当前无限易投资者账号。",
+    "mode_sync": "完整退出并重启无限易，让Adapter重新加载当前模式。",
+    "risk_limit_sync": "重新运行安装向导生成一致的双端风险配置。",
+    "profile_schema": "交易暂不可用；查询不受影响。需要交易时再运行交易启用流程。",
+    "profile_signature": "交易暂不可用；查询不受影响。完成现场验证后再签名。",
+    "profile_p0_binding": "重新核对目标账号、客户端和已验证交易动作。",
+    "profile_build_binding": "客户端版本发生变化；交易前重新完成相应现场验证。",
+    "ready_bundle": "重新运行安装向导并重新部署Adapter。",
+    "heartbeat": "启动无限易、登录账号，并在PythonGO中启动WorkBuddyPythonGO策略。",
+    "margin_policy_heartbeat": "完整退出并重启无限易，使Adapter加载当前保证金策略。",
+}
+
 
 def _default_mcp_path():
     return os.path.join(os.path.expanduser("~"), ".workbuddy", "mcp.json")
+
+
+def _local_app_data_dir(environ=None):
+    environ = os.environ if environ is None else environ
+    value = environ.get("LOCALAPPDATA")
+    if value:
+        return os.path.abspath(os.path.expandvars(value))
+    return os.path.abspath(os.path.join(os.path.expanduser("~"), "AppData", "Local"))
+
+
+def default_runtime_root(environ=None):
+    return os.path.join(_local_app_data_dir(environ), APP_DATA_DIRECTORY, "runtime")
+
+
+def runtime_pointer_path(environ=None):
+    return os.path.join(_local_app_data_dir(environ), APP_DATA_DIRECTORY, RUNTIME_POINTER_NAME)
+
+
+def _is_runtime_root(path):
+    return bool(path) and os.path.isfile(os.path.join(os.path.abspath(path), "config", "bridge.json"))
+
+
+def discover_runtime_root(default_root, legacy_root=None, pointer_path=None):
+    default_root = os.path.abspath(default_root)
+    pointer_path = os.path.abspath(pointer_path or runtime_pointer_path())
+    stale_pointer = None
+    try:
+        with open(pointer_path, "r", encoding="utf-8-sig") as stream:
+            saved = stream.readline().strip()
+        if saved:
+            saved = os.path.abspath(os.path.expandvars(saved))
+            if _is_runtime_root(saved):
+                return {"path": saved, "source": "saved", "pointer": pointer_path, "stale_pointer": None}
+            stale_pointer = saved
+    except FileNotFoundError:
+        pass
+    if legacy_root and _is_runtime_root(legacy_root):
+        return {
+            "path": os.path.abspath(legacy_root),
+            "source": "legacy",
+            "pointer": pointer_path,
+            "stale_pointer": stale_pointer,
+        }
+    return {
+        "path": default_root,
+        "source": "existing" if _is_runtime_root(default_root) else "new",
+        "pointer": pointer_path,
+        "stale_pointer": stale_pointer,
+    }
+
+
+def remember_runtime_root(root, pointer_path=None):
+    pointer_path = os.path.abspath(pointer_path or runtime_pointer_path())
+    return _write_changed(pointer_path, (os.path.abspath(root) + "\n").encode("utf-8"))
+
+
+def discover_mcp_config_paths(environ=None, home=None):
+    environ = os.environ if environ is None else environ
+    home = os.path.abspath(home or os.path.expanduser("~"))
+    candidates = []
+    override = environ.get("WORKBUDDY_MCP_CONFIG")
+    if override:
+        candidates.append(os.path.expandvars(override))
+    appdata = environ.get("APPDATA")
+    localappdata = environ.get("LOCALAPPDATA")
+    candidates.append(os.path.join(home, ".workbuddy", "mcp.json"))
+    if appdata:
+        candidates.extend([
+            os.path.join(appdata, "WorkBuddy", "mcp.json"),
+            os.path.join(appdata, "Tencent", "WorkBuddy", "mcp.json"),
+        ])
+    if localappdata:
+        candidates.append(os.path.join(localappdata, "WorkBuddy", "mcp.json"))
+    result = []
+    seen = set()
+    for path in candidates:
+        normalized = os.path.abspath(os.path.expandvars(path))
+        key = os.path.normcase(normalized)
+        if key not in seen and os.path.isfile(normalized):
+            seen.add(key)
+            result.append(normalized)
+    return result
+
+
+def discover_pythongo_strategy_dirs(environ=None, home=None):
+    environ = os.environ if environ is None else environ
+    if os.name != "nt" and not any(environ.get(name) for name in ("INFINITRADER_HOME", "INFINITRADER_PATH")):
+        return []
+    home = os.path.abspath(home or os.path.expanduser("~"))
+    roots = [
+        environ.get("INFINITRADER_HOME"),
+        environ.get("INFINITRADER_PATH"),
+        os.path.join(home, "Documents"),
+        environ.get("ProgramFiles"),
+        environ.get("ProgramFiles(x86)"),
+        environ.get("LOCALAPPDATA"),
+    ]
+    patterns = []
+    for root in roots:
+        if not root:
+            continue
+        root = os.path.abspath(os.path.expandvars(root))
+        patterns.extend([
+            os.path.join(root, "pyStrategy", "self_strategy"),
+            os.path.join(root, "*", "pyStrategy", "self_strategy"),
+            os.path.join(root, "*", "*", "pyStrategy", "self_strategy"),
+        ])
+    result = []
+    seen = set()
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            normalized = os.path.abspath(path)
+            key = os.path.normcase(normalized)
+            if key not in seen and os.path.isdir(normalized):
+                seen.add(key)
+                result.append(normalized)
+    return sorted(result, key=lambda value: os.path.normcase(value))
 
 
 def _desktop_dir():
@@ -79,6 +245,88 @@ def _retire_obsolete_shortcut(path):
     return {"path": path, "backup": backup}
 
 
+def deploy_adapter_files(ready_dir, strategy_dir):
+    ready_dir = os.path.abspath(ready_dir)
+    strategy_dir = os.path.abspath(os.path.expandvars(strategy_dir))
+    if (
+        os.path.basename(strategy_dir).lower() != "self_strategy"
+        or os.path.basename(os.path.dirname(strategy_dir)).lower() != "pystrategy"
+    ):
+        raise BridgeError(
+            "INVALID_STRATEGY_DIRECTORY",
+            "目标必须是无限易的pyStrategy\\self_strategy目录",
+            {"path": strategy_dir},
+        )
+    py_strategy_dir = os.path.dirname(strategy_dir)
+    if not os.path.isdir(py_strategy_dir):
+        raise BridgeError(
+            "STRATEGY_PARENT_NOT_FOUND",
+            "未找到目标目录的pyStrategy父目录，请先确认无限易安装位置",
+            {"path": py_strategy_dir},
+        )
+    sources = [os.path.join(ready_dir, name) for name in DEPLOYMENT_FILENAMES]
+    missing = [path for path in sources if not os.path.isfile(path)]
+    if missing:
+        raise BridgeError("READY_BUNDLE_INCOMPLETE", "runtime中的无限易部署文件不完整", {"missing": missing})
+    os.makedirs(strategy_dir, exist_ok=True)
+    deployed = []
+    for source, name in zip(sources, DEPLOYMENT_FILENAMES):
+        with open(source, "rb") as stream:
+            deployed.append(_write_changed(os.path.join(strategy_dir, name), stream.read()))
+    retired = []
+    for name in LEGACY_DEPLOYMENT_FILENAMES:
+        result = _retire_obsolete_shortcut(os.path.join(strategy_dir, name))
+        if result:
+            retired.append(result)
+    return {"directory": strategy_dir, "files": deployed, "retired": retired}
+
+
+def _select_mcp_path(default_mcp_path, input_func):
+    if default_mcp_path:
+        return _ask_path("WorkBuddy MCP配置文件", os.path.abspath(default_mcp_path), input_func)
+    discovered = discover_mcp_config_paths()
+    if not discovered:
+        print("未发现现有MCP配置，将使用WorkBuddy常用位置。")
+        return _ask_path("WorkBuddy MCP配置文件", _default_mcp_path(), input_func)
+    if len(discovered) == 1:
+        print("已发现WorkBuddy MCP配置：%s" % discovered[0])
+        return _ask_path("WorkBuddy MCP配置文件", discovered[0], input_func)
+    print("发现多个MCP配置，请选择要更新的文件：")
+    for index, path in enumerate(discovered, 1):
+        print("  %d. %s" % (index, path))
+    while True:
+        selected = input_func("请输入序号 [1]，或输入C填写其他路径：").strip().lower()
+        if not selected:
+            return discovered[0]
+        if selected == "c":
+            return _ask_path("WorkBuddy MCP配置文件", discovered[0], input_func)
+        if selected.isdigit() and 1 <= int(selected) <= len(discovered):
+            return discovered[int(selected) - 1]
+        print("请输入列表中的序号，或输入C。")
+
+
+def _select_strategy_dir(candidates, input_func):
+    candidates = list(candidates)
+    if candidates:
+        print("已发现以下无限易PythonGO策略目录：")
+        for index, path in enumerate(candidates, 1):
+            print("  %d. %s" % (index, path))
+        while True:
+            default = "1" if len(candidates) == 1 else "S"
+            selected = input_func("请输入序号 [%s]，输入C填写路径，输入S暂时跳过：" % default).strip().lower()
+            selected = selected or default.lower()
+            if selected == "s":
+                return None
+            if selected == "c":
+                value = input_func("请输入pyStrategy\\self_strategy完整路径：").strip()
+                return os.path.abspath(os.path.expandvars(value)) if value else None
+            if selected.isdigit() and 1 <= int(selected) <= len(candidates):
+                return candidates[int(selected) - 1]
+            print("请输入列表中的序号、C或S。")
+    value = input_func("未自动发现无限易；可输入pyStrategy\\self_strategy完整路径，直接按Enter暂时跳过：").strip()
+    return os.path.abspath(os.path.expandvars(value)) if value else None
+
+
 def create_shortcuts(config_path, target_dir=None, python_executable=None):
     config = load_config(config_path)
     config_path = os.path.abspath(config.path)
@@ -97,42 +345,42 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
     scripts = {
         "启动PythonGO桥接.cmd": (
             prefix
-            + "title WorkBuddy PythonGO Bridge\r\n"
-            + "echo Select the Worker mode first, then the bridge will start.\r\n"
-            + "echo Press Enter at the mode prompt to use the safe OBSERVE_ONLY default.\r\n"
-            + "echo Keep this window open while the Worker is running.\r\n"
+            + "title WorkBuddy PythonGO 桥接启动器\r\n"
+            + "echo 请先选择Worker运行模式，随后桥接服务会在当前窗口启动。\r\n"
+            + "echo 在模式提示处直接按Enter，将使用安全的OBSERVE_ONLY默认值。\r\n"
+            + "echo Worker运行期间请保持此窗口打开。\r\n"
             + "echo.\r\n"
             + manager_command
             + " refresh-margin-reference --if-due >nul 2>&1\r\n"
             + "set \"MARGIN_REFRESH_EXIT=%ERRORLEVEL%\"\r\n"
             + "if \"%MARGIN_REFRESH_EXIT%\"==\"3\" goto margin_policy_migration_required\r\n"
-            + "if not \"%MARGIN_REFRESH_EXIT%\"==\"0\" echo [WARNING] Margin refresh failed. Opening trades will remain fail-closed if InfiniTrader also omits the ratio.\r\n"
+            + "if not \"%MARGIN_REFRESH_EXIT%\"==\"0\" echo [警告] 保证金参考刷新失败；若无限易也未提供比例，开仓会继续安全拒绝。\r\n"
             + "echo.\r\n"
             + command
             + " start\r\n"
             + "set \"EXIT_CODE=%ERRORLEVEL%\"\r\n"
             + "echo.\r\n"
-            + "if not \"%EXIT_CODE%\"==\"0\" echo The bridge did not exit normally. Run the status shortcut for automatic diagnostics.\r\n"
+            + "if not \"%EXIT_CODE%\"==\"0\" echo 桥接服务未正常退出，请双击“查看PythonGO桥接状态.cmd”自动诊断。\r\n"
             + "pause\r\n"
             + "exit /b %EXIT_CODE%\r\n"
             + ":margin_policy_migration_required\r\n"
             + "echo.\r\n"
-            + "echo [BLOCKED] Margin policy configuration requires explicit migration.\r\n"
-            + "echo Run this command, review its result, then start the bridge again:\r\n"
+            + "echo [需要复核] 保证金策略发生实质变化，交易暂不启用；查询仍可使用。\r\n"
+            + "echo 请运行下面的命令并核对结果，然后重新启动桥接：\r\n"
             + "echo.\r\n"
             + "echo "
             + manager_command
             + " migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY\r\n"
             + "echo.\r\n"
-            + "echo A material policy change keeps Profile signatures intact but activates the local halt for review.\r\n"
+            + "echo 实质策略变化会保留Profile签名，但交易会保持保护状态，直到完成复核。\r\n"
             + "pause\r\n"
             + "exit /b 3\r\n"
         ),
         "查看PythonGO桥接状态.cmd": (
             prefix
-            + "title WorkBuddy PythonGO Bridge Status\r\n"
-            + "echo Checking the current bridge status...\r\n"
-            + "echo Diagnostics will run automatically only when the status is abnormal.\r\n"
+            + "title WorkBuddy PythonGO 桥接状态\r\n"
+            + "echo 正在检查桥接状态……\r\n"
+            + "echo 仅在状态异常时自动运行详细诊断。\r\n"
             + "echo.\r\n"
             + command
             + " status\r\n"
@@ -208,16 +456,40 @@ def _ask_path(prompt, default, input_func=input):
     return os.path.abspath(os.path.expandvars(value or default))
 
 
-def run_setup(default_root, input_func=input, default_mcp_path=None):
+def run_setup(
+    default_root,
+    input_func=input,
+    default_mcp_path=None,
+    discover_existing=False,
+    legacy_root=None,
+    pointer_path=None,
+    strategy_candidates=None,
+):
     _header("WorkBuddy-PythonGO首次配置向导")
     print("所有新环境固定从OBSERVE_ONLY开始。")
-    print("向导不会启动Worker、无限易或Adapter，不会签名Profile，也不会开放交易。")
+    print("查询功能开箱即用；交易功能以后需要时再单独启用。")
+    print("向导不会启动Worker或无限易，不会签名Profile，也不会开放交易。")
     print("直接按Enter可采用显示在方括号中的安全默认值。")
 
-    print("\n[向导 1/5] 选择安全运行目录")
-    root = _ask_path("运行目录", os.path.abspath(default_root), input_func)
+    print("\n[向导 1/6] 选择稳定运行目录")
+    runtime_discovery = {
+        "path": os.path.abspath(default_root), "source": "requested",
+        "pointer": os.path.abspath(pointer_path) if pointer_path else runtime_pointer_path(),
+        "stale_pointer": None,
+    }
+    if discover_existing:
+        runtime_discovery = discover_runtime_root(default_root, legacy_root, pointer_path)
+        source_labels = {
+            "saved": "上次保存的运行目录", "legacy": "旧安装包中的已有运行目录",
+            "existing": "默认位置中的已有运行目录", "new": "新的稳定运行目录",
+        }
+        print("已选择%s：%s" % (source_labels.get(runtime_discovery["source"], "运行目录"), runtime_discovery["path"]))
+        if runtime_discovery.get("stale_pointer"):
+            print("提示：上次保存的位置已不存在，已安全回退：%s" % runtime_discovery["stale_pointer"])
+    root = _ask_path("运行目录", runtime_discovery["path"], input_func)
     init_result = initialize(root)
     config_path = init_result["config"]
+    pointer_result = remember_runtime_root(root, pointer_path)
     if init_result["created"]:
         print("已创建%d个初始文件；已有同名配置、密钥、token和Profile不会被覆盖。" % len(init_result["created"]))
     else:
@@ -225,16 +497,16 @@ def run_setup(default_root, input_func=input, default_mcp_path=None):
     print("运行目录：%s" % root)
     migration_result = migrate_margin_policy_if_safe(config_path)
     if migration_result.get("review_required"):
-        print("检测到保证金风险策略实质变化；安装器未自动修改，请稍后在修复流程中复核。")
+        print("检测到保证金风险策略实质变化；查询仍可使用，交易前请运行：")
+        print('  "%s" -m workbuddy_pythongo.manager --config "%s" migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY' % (sys.executable, config_path))
     elif migration_result.get("migrated"):
         print("已自动补齐保证金策略跟踪字段；Profile保持原值，未开启交易保护。")
 
-    print("\n[向导 2/5] 配置WorkBuddy MCP")
+    print("\n[向导 2/6] 配置WorkBuddy MCP")
     print("合并操作只新增或更新mcpServers.workbuddy-pythongo，并保留其他MCP服务。")
     mcp_result = None
     if _ask_yes_no("是否现在合并WorkBuddy MCP配置", True, input_func):
-        mcp_default = os.path.abspath(default_mcp_path or _default_mcp_path())
-        mcp_path = _ask_path("WorkBuddy MCP配置文件", mcp_default, input_func)
+        mcp_path = _select_mcp_path(default_mcp_path, input_func)
         mcp_result = merge_mcp_config(mcp_path, config_path)
         print("MCP配置：%s" % mcp_result["path"])
         if mcp_result.get("backup"):
@@ -244,7 +516,7 @@ def run_setup(default_root, input_func=input, default_mcp_path=None):
     else:
         print("已跳过。稍后可从runtime中的workbuddy.mcp.example.json手工合并。")
 
-    print("\n[向导 3/5] 绑定无限易投资者账号（可跳过）")
+    print("\n[向导 3/6] 绑定无限易投资者账号（可跳过）")
     config = load_config(config_path)
     account = config.account("main_futures")
     binding_missing = "REPLACE" in account.investor_fingerprint.upper()
@@ -257,7 +529,7 @@ def run_setup(default_root, input_func=input, default_mcp_path=None):
             if not investor_id:
                 raise BridgeError("INVALID_REQUEST", "投资者账号不能为空")
             bind_result = bind_investor(config_path, "main_futures", investor_id, "BIND-ACCOUNT")
-            print("账号绑定完成；系统保持本地熔断和OBSERVE_ONLY，必须完成P0后才能签名Profile。")
+            print("账号绑定完成；查询功能可正常配置。交易尚未启用，不属于故障或熔断。")
         else:
             print("已跳过。稍后使用bind-investor本机命令完成绑定。")
     else:
@@ -265,7 +537,28 @@ def run_setup(default_root, input_func=input, default_mcp_path=None):
         print("这可避免每次运行安装向导都作废Profile并触发本地熔断。")
         print("只有目标无限易账号确实变化时，才使用bind-investor本机命令重新绑定。")
 
-    print("\n[向导 4/5] 创建桌面入口")
+    print("\n[向导 4/6] 部署无限易PythonGO策略文件")
+    deployment_result = None
+    candidates = discover_pythongo_strategy_dirs() if strategy_candidates is None else strategy_candidates
+    strategy_dir = _select_strategy_dir(candidates, input_func)
+    if strategy_dir:
+        try:
+            deployment_result = deploy_adapter_files(init_result["ready_dir"], strategy_dir)
+            print("已部署到：%s" % deployment_result["directory"])
+            for item in deployment_result["files"]:
+                if item.get("backup"):
+                    print("已备份旧文件：%s" % item["backup"])
+            for item in deployment_result["retired"]:
+                print("已停用旧配置并保留备份：%s" % item["backup"])
+        except (BridgeError, OSError) as exc:
+            message = exc.message if isinstance(exc, BridgeError) else str(exc)
+            deployment_result = {"ok": False, "directory": strategy_dir, "error": message}
+            print("自动部署未完成：%s" % message)
+            print("稍后可重新运行首次配置向导；现有无限易文件未被直接删除。")
+    else:
+        print("已跳过自动部署；配置结果中会保留手工部署提示。")
+
+    print("\n[向导 5/6] 创建桌面入口")
     shortcut_result = None
     print("保证金更新已合并到启动入口，不再单独创建更新入口。")
     if _ask_yes_no("是否创建启动和状态两个入口", True, input_func):
@@ -275,25 +568,32 @@ def run_setup(default_root, input_func=input, default_mcp_path=None):
     else:
         print("已跳过。稍后可运行create-shortcuts补建启动和状态两个入口。")
 
-    print("\n[向导 5/5] 配置结果与后续人工操作")
+    print("\n[向导 6/6] 配置完成")
     print("Bridge配置：%s" % config_path)
     print("PythonGO运行配置与部署文件：%s" % init_result["ready_dir"])
-    print("下一步：")
+    print("查询功能的下一步：")
     print("  1. 如已合并MCP配置，重启WorkBuddy。")
-    print("  2. 仅把WorkBuddyPythonGOAdapter.py和pythongo_adapter.path部署到无限易PythonGO策略目录。")
-    print("     删除该策略目录中的旧pythongo_adapter.json和pythongo_profile.json。")
-    print("  3. 完整启动无限易，并在其中手工启动WorkBuddyPythonGO策略。")
-    print("  4. 首次启动Worker必须选择OBSERVE_ONLY。")
-    print("  5. 运行状态入口并完成P0清单；证据完整前不要签名Profile或切换模式。")
-    print("  6. 以后日常启动使用“启动PythonGO桥接.cmd”，不要重复使用首次安装入口。")
+    if deployment_result and deployment_result.get("ok", True):
+        print("  2. 启动无限易，并在PythonGO中启动WorkBuddyPythonGOAdapter策略。")
+    else:
+        print("  2. 把ready目录中的两个部署文件放入无限易pyStrategy\\self_strategy目录。")
+        print("     只需要WorkBuddyPythonGOAdapter.py和pythongo_adapter.path；旧JSON请改名备份。")
+        print("  3. 启动无限易，并在PythonGO中启动WorkBuddyPythonGOAdapter策略。")
+    print("  4. 双击“启动PythonGO桥接.cmd”，直接按Enter使用OBSERVE_ONLY。")
+    print("  5. 此时即可使用查询接口；P0、Profile签名和解除交易保护都不是查询前置步骤。")
+    print("以后需要交易时：再按文档执行一次性P0验证、签名Profile并选择交易模式。")
+    print("日常启动只使用“启动PythonGO桥接.cmd”，无需重复安装。")
     print("\n配置向导不会自动启动Worker、无限易或WorkBuddy。")
     return {
         "root": root,
         "config": config_path,
         "ready_dir": init_result["ready_dir"],
         "margin_policy_migration": migration_result,
+        "runtime_discovery": runtime_discovery,
+        "runtime_pointer": pointer_result,
         "mcp": mcp_result,
         "binding": bind_result,
+        "deployment": deployment_result,
         "shortcuts": shortcut_result,
     }
 
@@ -381,13 +681,25 @@ def print_status_human(config_path, probe, issues):
     print("Worker：%s" % {"RUNNING": "正在运行", "STOPPED": "未启动", "CONFLICT": "端口冲突或响应异常"}.get(state, state))
     if state != "RUNNING":
         print("原因：%s" % (probe.get("message") or "未知"))
+        if state == "STOPPED":
+            print("下一步：双击“启动PythonGO桥接.cmd”，在模式选择处直接按Enter。")
+        elif state == "CONFLICT":
+            print("下一步：关闭占用Bridge端口的其他程序，再重新启动桥接。")
     else:
         health = (probe.get("response") or {}).get("data") or {}
         mode = health.get("mode", "UNKNOWN")
         print("运行模式：%s" % mode)
         protection = health.get("trade_protection") or {}
+        protection_kind = protection.get("kind") or ("INCIDENT_HALT" if health.get("halted") else "NONE")
         if health.get("halted") or protection.get("active"):
-            print("交易保护：已开启；原因：%s" % (health.get("halt_reason") or protection.get("reason") or "未记录"))
+            if protection_kind == "SETUP_LOCK" and not health.get("halted"):
+                print("交易状态：尚未启用（首次配置状态，不是故障或熔断）。")
+                print("需要交易时：完成一次性P0验证并签名Profile；只查询无需处理。")
+            elif protection_kind == "POLICY_REVIEW":
+                print("交易状态：保证金策略需要复核；查询不受影响。")
+                print("原因：%s" % (health.get("halt_reason") or protection.get("reason") or "未记录"))
+            else:
+                print("交易保护：已开启；原因：%s" % (health.get("halt_reason") or protection.get("reason") or "未记录"))
             if health.get("observation_ready") or protection.get("queries_available"):
                 print("查询状态：可用；仅阻止新的交易提交。")
         elif mode == "OBSERVE_ONLY":
@@ -433,6 +745,7 @@ def print_status_human(config_path, probe, issues):
 def print_doctor_human(report):
     _header("自动配置诊断")
     print("诊断结果：%d项错误，%d项警告" % (int(report.get("errors", 0)), int(report.get("warnings", 0))))
+    actions = []
     for check in report.get("checks") or []:
         if check.get("ok"):
             marker = "通过"
@@ -440,7 +753,17 @@ def print_doctor_human(report):
             marker = "警告"
         else:
             marker = "错误"
-        print("  [%s] %s：%s" % (marker, check.get("name", "unknown"), check.get("detail", "")))
+        raw_name = check.get("name", "unknown")
+        key = raw_name.rsplit(":", 1)[-1]
+        label = DOCTOR_LABELS.get(key, raw_name)
+        print("  [%s] %s：%s" % (marker, label, check.get("detail", "")))
+        action = DOCTOR_ACTIONS.get(key)
+        if not check.get("ok") and action and action not in actions:
+            actions.append(action)
+    if actions:
+        print("\n建议操作：")
+        for index, action in enumerate(actions, 1):
+            print("  %d. %s" % (index, action))
 
 
 def get_start_mode_availability(config_path):
@@ -455,6 +778,7 @@ def _blocker_summary(blockers):
     labels = {
         "PROFILE_INVALID": "P0 Profile未验证或绑定不完整",
         "TRADING_HALTED": "交易保护尚未解除",
+        "TRADE_PROTECTION_ACTIVE": "交易功能尚未启用或仍需复核",
     }
     return "；".join(labels.get(item.get("code"), item.get("message", "门禁未通过")) for item in blockers)
 
@@ -516,7 +840,9 @@ def start_desktop(config_path):
             changed = set_mode(config.path, mode, confirm)
             break
         except BridgeError as exc:
-            if mode == "OBSERVE_ONLY" or exc.code not in {"PROFILE_INVALID", "SIGNATURE_INVALID", "TRADING_HALTED"}:
+            if mode == "OBSERVE_ONLY" or exc.code not in {
+                "PROFILE_INVALID", "SIGNATURE_INVALID", "TRADING_HALTED", "TRADE_PROTECTION_ACTIVE",
+            }:
                 raise
             print("\n%s启动前的安全状态已经变化：%s" % (mode, exc.message))
             action = input("按Enter重新检查并返回模式菜单；输入Q取消启动：").strip().lower()
@@ -565,6 +891,8 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
     setup = sub.add_parser("setup", help="运行首次交互配置向导")
     setup.add_argument("--root", required=True)
+    setup.add_argument("--discover-existing", action="store_true", help="优先复用上次保存或旧安装包中的runtime")
+    setup.add_argument("--legacy-root", help="旧安装包中可能存在的runtime目录")
     sub.add_parser("start", help="交互选择模式并在当前窗口启动Worker")
     sub.add_parser("status", help="检查实时状态，异常时自动运行doctor")
     shortcuts = sub.add_parser("create-shortcuts", help="创建桌面启动和状态脚本")
@@ -576,7 +904,7 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         if args.command == "setup":
-            run_setup(args.root)
+            run_setup(args.root, discover_existing=args.discover_existing, legacy_root=args.legacy_root)
             return 0
         if not args.config:
             raise BridgeError("CONFIG_REQUIRED", "该命令需要--config")

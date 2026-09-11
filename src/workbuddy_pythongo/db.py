@@ -334,6 +334,14 @@ class Database:
                 "INSERT OR IGNORE INTO system_state(key,value,updated_at) VALUES('halt_reason','',?)",
                 (iso_now(),),
             )
+            connection.execute(
+                "INSERT OR IGNORE INTO system_state(key,value,updated_at) VALUES('trade_protection_kind','NONE',?)",
+                (iso_now(),),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO system_state(key,value,updated_at) VALUES('trade_protection_reason','',?)",
+                (iso_now(),),
+            )
             row = connection.execute("SELECT value FROM system_state WHERE key='mode'").fetchone()
             current = normalize_mode(row["value"], allow_legacy=True)
             if current != row["value"]:

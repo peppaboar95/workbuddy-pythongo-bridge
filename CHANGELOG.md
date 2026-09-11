@@ -2,6 +2,20 @@
 
 本项目的重要变化记录在此。版本号遵循 Semantic Versioning。
 
+## 0.3.6 - 2026-09-11
+
+### Fixed
+
+- Windows 安装器把运行数据固定到 `%LOCALAPPDATA%\WorkBuddyPythonGO\runtime`，并通过本机指针或旧安装包 runtime 自动复用已有环境，避免换目录升级后生成第二套密钥和配置；
+- 配置向导可发现常见 WorkBuddy MCP 配置与无限易 `pyStrategy\self_strategy` 目录；用户确认后仅部署两个必要文件，覆盖前备份，旧 JSON 改名保留；
+- 首次账号绑定改为 `SETUP_LOCK`，数据库不再记录为事故熔断；查询链路可直接使用，P0、Profile 签名与解除交易保护只在启用交易时需要；
+- P0 不再硬编码单一合约或固定隔离金额，目标合约和不超过验证上限的单次额度由短时签名命令精确绑定，双端仍校验一手、行情、资金、持仓、保证金与本地交易锁；
+- 桌面状态、doctor、启动脚本和安装脚本补齐中文原因与下一步操作，Worker 未启动时直接提示正确入口。
+
+### Testing
+
+- Windows CI 扩展到 Python 3.10–3.14，并覆盖含空格/中文路径的 wheel 安装、稳定 runtime 发现、MCP 发现、首次/升级向导和 Adapter 备份部署。
+
 ## 0.3.5 - 2026-09-11
 
 ### Changed

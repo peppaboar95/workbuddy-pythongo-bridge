@@ -1,6 +1,6 @@
 # WorkBuddy 与无限易（PythonGO）桥接程序设计
 
-> 状态：Design v0.3.5（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）
+> 状态：Design v0.3.6（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）
 > 日期：2026-08-27  
 > 适用范围：Windows、Tencent WorkBuddy、无限易客户端、PythonGO v2、期货行情监控及模拟/实盘交易  
 > 风险声明：本文描述交易基础设施，不构成投资建议。任何实盘能力必须经过只读、空跑、模拟、人工确认和小额灰度验证。
@@ -327,7 +327,7 @@ Adapter 启动时：
 
 账号指纹不能直接使用低熵账号的裸 SHA-256。采用带版本和域分离的 `HMAC-SHA256(binding_key, "pythongo-investor-v1\0" + normalized_investor_id)`；`binding_key` 只保存在本机 secrets 中。日志和 MCP 仅返回短前缀用于诊断，不返回完整指纹。
 
-本机修改账号绑定时必须先写入耐久熔断并立即把旧 Profile 置为未验证，再按 Profile、Adapter 配置、Worker 配置的顺序原子替换。但重复输入与 Worker 和 Adapter 已批准指纹完全一致的账号必须是幂等无操作，不得作废 Profile 或开启熔断。完成 P0、重签和诊断后才可由本机 Console 使用 `CLEAR-HALT` 恢复到 `OBSERVE_ONLY`；中途崩溃不得继续沿用旧绑定证据。
+本机修改已有账号绑定时必须先写入耐久 `ACCOUNT_CHANGE` 保护并立即把旧 Profile 置为未验证，再按 Profile、Adapter 配置、Worker 配置的顺序原子替换。但首次从占位符绑定账号时没有可失效的旧交易证据，应写 `SETUP_LOCK` 并保持数据库全局熔断为 false，使界面表达为“交易尚未启用”而不是事故；Adapter 本地交易锁仍保持 true。重复输入与 Worker 和 Adapter 已批准指纹完全一致的账号必须是幂等无操作，不得作废 Profile 或改变保护状态。完成 P0、重签和诊断后才可由本机 Console 使用 `CLEAR-HALT` 恢复到 `OBSERVE_ONLY`；中途崩溃不得继续沿用旧绑定证据。
 
 ### 7.2 推荐一账号一 Adapter 实例
 
@@ -402,7 +402,7 @@ Adapter 事件至少包含：
 
 具备本机文件和命令行权限的 AI Agent 可以在操作者提供并确认 P0 证据后，机械地填写 Profile、同步 Adapter 的 `expected_*`、调用本机签名命令并运行 `doctor`；它不能自行猜测柜台构建、方向/开平枚举、线程模型或回调字段，也不得输出完整账号、Worker token、消息密钥或签名内容。
 
-P0 报撤单探针是唯一例外性的兼容性取证通道，但仍不得绕开本地控制：它只存在于 Local Console，不进入 MCP；要求操作者精确确认、Worker 和 Adapter 均为 `OBSERVE_ONLY`、耐久熔断仍开启、账户与 Adapter 绑定一致、行情/资金快照新鲜、硬风险阈值通过。Console 写入最长 30 秒的一次性签名授权，命令固定为 1 手、实时跌停价、`BUY/0/GFD/1/market=false` 候选映射；Adapter 在 Tick 主线程消费授权并写 `PRE_SUBMIT` 日记，获得非负本地报单号后立即调用精确撤单。现场 P0 已确认目标 PythonGO 构建的首个有效本地委托号可以是 `0`，`-1` 才表示报单前失败，`None` 或异常保持 `SUBMIT_UNKNOWN`。该通道产生的入参、返回值和原始回调仅作为 P0 候选证据，在操作者复核前不得写成已验证 Profile。若操作者对某个实际合约另行批准单次隔离名义金额额度，该额度必须作为签名命令字段绑定到精确交易所、合约月份和固定金额，由 Worker 与 Adapter 双重校验，并增加保守保证金门禁；不得修改或替代账户常规 `max_order_notional`。当前现场唯一批准组合为 `SHFE:au2610`、90 万元、20% 保守保证金比例，其他组合全部失败关闭。
+P0 报撤单探针是唯一例外性的兼容性取证通道，但仍不得绕开本地控制：它只存在于 Local Console，不进入 MCP；要求操作者精确确认、Worker 和 Adapter 均为 `OBSERVE_ONLY`、Adapter 本地交易锁仍开启、账户与 Adapter 绑定一致、行情/资金快照新鲜、硬风险阈值通过。Console 写入最长 30 秒的一次性签名授权，命令固定为 1 手、实时跌停价、`BUY/0/GFD/1/market=false` 候选映射；Adapter 在 Tick 主线程消费授权并写 `PRE_SUBMIT` 日记，获得非负本地报单号后立即调用精确撤单。现场 P0 已确认目标 PythonGO 构建的首个有效本地委托号可以是 `0`，`-1` 才表示报单前失败，`None` 或异常保持 `SUBMIT_UNKNOWN`。该通道产生的入参、返回值和原始回调仅作为 P0 候选证据，在操作者复核前不得写成已验证 Profile。若操作者对实际合约另行批准单次隔离名义金额额度，额度必须为正且不超过 100 万元，并与精确交易所、合约月份一起进入签名命令和命令哈希，由 Worker 与 Adapter 双重校验，同时使用 20% 保守保证金门禁；不得修改或替代账户常规 `max_order_notional`。源码不预先批准任何固定合约或固定隔离金额。
 
 ## 8. Embedded Adapter 生命周期
 
@@ -1459,11 +1459,11 @@ MCP `cancel_order` 接受桥接订单 ID，Worker 映射到明确的 PythonGO `o
 
 桌面启动入口在模式菜单前静默执行 `refresh-margin-reference --if-due`：同一上海时区自然日内，本机签名、CSV 哈希和本机刷新时间均有效时即可跳过网络刷新；源页面的手续费更新时间过旧只产生软告警，不导致当日重复下载。正常刷新或跳过时不得向启动窗口打印 CSV 加载过程或结果 JSON，普通失败时只显示一行简短警告。日常刷新只能校验、原子写入和签名 CSV/元数据，不得修改 Adapter 配置、Profile、模式、熔断或授权。刷新失败不得阻止观察模式启动，也不得让超过本机刷新硬阈值的旧文件继续授权开仓；无限易原生比例也不可用时仍由既有开仓风控失败关闭。保证金更新不再提供独立桌面入口；人工强制刷新仍使用 Manager 命令。
 
-保证金风险策略与参考数据生命周期分离。Adapter 配置保存 `margin_reference_policy_generation` 及由参考文件路径、Schema、本机刷新硬阈值、安全系数和验签要求计算的策略哈希；Adapter 心跳回传两者，Worker 不一致时以 `MARGIN_POLICY_MISMATCH` 失败关闭。旧配置只能通过本机 `migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY` 显式迁移，刷新命令不得代行。仅补齐跟踪字段时不熔断；风险策略实质变化时必须先触发全局和 Adapter 本地熔断、撤销短时/自动授权并使未消费 Preview 失效，再写入新代次。Profile 证明客户端构建、账号和交易映射，不绑定每日参考数据或保证金策略，因此迁移必须保持 Profile 字节不变；只有 Profile 自身的绑定证据变化才要求重新 P0 和签名。桌面启动器遇到 `MARGIN_POLICY_MIGRATION_REQUIRED` 必须明确阻断并显示迁移命令，不得作为普通下载告警继续启动。
+保证金风险策略与参考数据生命周期分离。Adapter 配置保存 `margin_reference_policy_generation` 及由参考文件路径、Schema、本机刷新硬阈值、安全系数和验签要求计算的策略哈希；Adapter 心跳回传两者，Worker 不一致时以 `MARGIN_POLICY_MISMATCH` 失败关闭。刷新命令和 Worker 启动不得暗中迁移；安装/升级向导可以自动补齐不改变风险语义的跟踪字段，其他迁移必须通过本机 `migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY` 显式复核。仅补齐跟踪字段时不熔断；风险策略实质变化时必须先触发全局和 Adapter 本地熔断、撤销短时/自动授权并使未消费 Preview 失效，再写入新代次。Profile 证明客户端构建、账号和交易映射，不绑定每日参考数据或保证金策略，因此迁移必须保持 Profile 字节不变；只有 Profile 自身的绑定证据变化才要求重新 P0 和签名。桌面启动器遇到 `MARGIN_POLICY_MIGRATION_REQUIRED` 必须明确阻断并显示迁移命令，不得作为普通下载告警继续启动。
 
-桌面启动器在显示四种模式前先执行只读门禁预检：`OBSERVE_ONLY` 始终可选；Profile 未验证、签名/构建/账号绑定不完整或本地熔断开启时，三种非观察模式必须在菜单中标注“暂不可用”及原因。操作者误选受阻模式时返回模式菜单或正常取消，不得把预期的安全拒绝显示成 Worker 异常退出；实际 `set-mode` 仍须独立重复校验，以防预检后状态变化形成竞态绕过。
+桌面启动器在显示四种模式前先执行只读门禁预检：`OBSERVE_ONLY` 始终可选；Profile 未验证、签名/构建/账号绑定不完整或任一交易保护开启时，三种非观察模式必须在菜单中标注“暂不可用”及原因。操作者误选受阻模式时返回模式菜单或正常取消，不得把预期的安全拒绝显示成 Worker 异常退出；实际 `set-mode` 仍须独立重复校验，以防预检后状态变化形成竞态绕过。
 
-首次配置向导只负责安装 wheel、创建密钥/token、生成严格 JSON、生成每账户 Adapter bundle、合并 MCP 示例和创建桌面入口；它不得启动无限易、替用户登录、将 Profile 标为已验证、签名 Profile、切换到非观察模式或创建 LIVE 授权。已有账号指纹的运行目录重复执行 setup 时必须保留原绑定，不再询问重新绑定；账号变更只能通过独立的本机 `bind-investor` 操作明确发起，避免把日常重装误当成安全事件并反复触发耐久熔断。
+首次配置向导只负责安装 wheel、创建密钥/token、生成严格 JSON、生成每账户 Adapter bundle、合并 MCP 配置、经用户选择后部署两个 Adapter 文件和创建桌面入口；它不得启动无限易、替用户登录、将 Profile 标为已验证、签名 Profile、切换到非观察模式或创建 LIVE 授权。发布包 runtime 默认固定在用户 `LOCALAPPDATA`，向导通过本机指针和旧包路径发现已有 runtime，避免换解压目录时创建第二套身份。Adapter 自动部署只能写 `WorkBuddyPythonGOAdapter.py` 和 `pythongo_adapter.path`，覆盖前备份，并把策略目录中的旧 JSON 改名保留。已有账号指纹的运行目录重复执行 setup 时必须保留原绑定，不再询问重新绑定；账号变更只能通过独立的本机 `bind-investor` 操作明确发起，避免把日常重装误当成安全事件并反复触发耐久熔断。
 
 ### 26.2 Worker 配置契约
 

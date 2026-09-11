@@ -135,6 +135,12 @@ class MarginPolicyTests(unittest.TestCase):
             self.assertTrue(result["material_change"])
             self.assertTrue(result["halted_for_policy_change"])
             self.assertTrue(result["profiles_preserved"])
+            _, database, _ = build_runtime(config_path)
+            with database.connect() as connection:
+                kind = connection.execute(
+                    "SELECT value FROM system_state WHERE key='trade_protection_kind'"
+                ).fetchone()["value"]
+            self.assertEqual(kind, "POLICY_REVIEW")
             with open(profile_path, "rb") as stream:
                 self.assertEqual(stream.read(), profile_before)
 

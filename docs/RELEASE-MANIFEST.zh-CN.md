@@ -1,4 +1,4 @@
-# WorkBuddy-PythonGO Bridge 0.3.5 发布包说明
+# WorkBuddy-PythonGO Bridge 0.3.6 发布包说明
 
 本发布包用于在另一台 Windows 电脑上安装 WorkBuddy-PythonGO Bridge。安装过程使用包内 wheel，不需要复制开发源码，也不会携带制作电脑的运行数据。
 
@@ -8,28 +8,28 @@
 - Python 3.10 或更高版本；
 - Tencent WorkBuddy；
 - 目标无限易客户端及 PythonGO v2；
-- 目标电脑上的完整投资者账号，以及在目标无限易/PythonGO/柜台组合上完成 P0 的条件。
+- 目标电脑上的完整投资者账号；只有计划启用交易时，才需要具备在目标无限易/PythonGO/柜台组合上完成 P0 的条件。
 
 ## 安装
 
 1. 校验 ZIP 同目录的 `.zip.sha256`，并可使用包内 `SHA256SUMS.txt` 校验解压文件；
 2. 将 ZIP 完整解压到普通用户可写的独立目录；
 3. 双击 `首次安装与配置.cmd`；
-4. 在中文向导中选择运行目录、WorkBuddy MCP 合并、投资者账号绑定和桌面入口；
-5. 按向导最后一页，仅将 `pythongo_ready` 中的 `WorkBuddyPythonGOAdapter.py` 和 `pythongo_adapter.path` 部署到目标无限易 PythonGO 策略目录；
-6. 首次只使用 `OBSERVE_ONLY`，完成目标环境 P0、Profile 复核和本机签名后再考虑其他模式。
+4. 在中文向导中确认稳定运行目录、WorkBuddy MCP 配置、投资者账号、无限易策略目录和桌面入口；
+5. 若向导发现无限易 `pyStrategy\self_strategy`，选择正确目录后由向导备份并部署两个必要文件；未发现时再按最后一页手工部署；
+6. 首次只使用 `OBSERVE_ONLY`，启动 Adapter 后即可使用查询；以后需要交易时，再完成目标环境 P0、Profile 复核和本机签名。
 
 安装脚本不会自动启动 Worker、无限易、PythonGO Adapter 或 WorkBuddy，不会签名 Profile，也不会开放模拟、人工或自动交易。
 
 ## 包内文件
 
 - `首次安装与配置.cmd`：Windows 安装入口；
-- `workbuddy_pythongo_bridge-0.3.5-py3-none-any.whl`：Python 安装包；
+- `workbuddy_pythongo_bridge-0.3.6-py3-none-any.whl`：Python 安装包；
 - `LICENSE`：专有许可条款；
 - `README-RELEASE.zh-CN.md`：完整使用说明；
 - `workbuddy-pythongo-bridge-design.md`：设计、安全边界和运行模型；
 - `RELEASE-MANIFEST.zh-CN.md`：本说明；
-- `RELEASE-v0.3.5.md`：本版本变化、升级说明和已知边界；
+- `RELEASE-v0.3.6.md`：本版本变化、升级说明和已知边界；
 - `examples/`：P0 清单和观察模式交易请求示例；
 - `workbuddy.mcp.example.json`、`workbuddy.mcp.example.README.md`：手工排障时使用的 MCP 示例；
 - `SHA256SUMS.txt`：包内文件的 SHA-256 清单。

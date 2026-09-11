@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v6
@@ -47,6 +47,16 @@ jobs:
           $wheel = Get-ChildItem -LiteralPath .\dist -Filter *.whl | Select-Object -First 1
           python -m pip install --force-reinstall $wheel.FullName
           python -c "import importlib.metadata as m, workbuddy_pythongo; assert workbuddy_pythongo.__version__ == m.version('workbuddy-pythongo-bridge')"
+      - name: Verify wheel from path with spaces and CJK characters
+        shell: pwsh
+        run: |
+          $sourceWheel = Get-ChildItem -LiteralPath .\dist -Filter *.whl | Select-Object -First 1
+          $packageDir = Join-Path $env:RUNNER_TEMP "中文 安装包"
+          $targetDir = Join-Path $env:RUNNER_TEMP "中文 Python环境"
+          New-Item -ItemType Directory -Force -Path $packageDir, $targetDir | Out-Null
+          $copiedWheel = Copy-Item -LiteralPath $sourceWheel.FullName -Destination $packageDir -PassThru
+          python -m pip install --no-deps --target $targetDir $copiedWheel.FullName
+          python -c "import sys; sys.path.insert(0, sys.argv[1]); import workbuddy_pythongo; print(workbuddy_pythongo.__version__)" $targetDir
       - uses: actions/upload-artifact@v4
         with:
           name: release-candidate
@@ -55,4 +65,3 @@ jobs:
             dist/*.zip
             dist/*.sha256
             dist/SHA256SUMS.txt
-

@@ -64,6 +64,7 @@ class HealthStateTests(unittest.TestCase):
                 health["trade_protection"],
                 {
                     "active": True,
+                    "kind": "INCIDENT_HALT",
                     "reason": "account binding changed",
                     "queries_available": True,
                     "blocked_operation": "NEW_TRADES",

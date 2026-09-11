@@ -544,7 +544,9 @@ def _migrate_margin_policy(config_path, allow_material, automatic):
         }
     halt_result = None
     if material_change:
-        halt_result = core.halt_trading("local margin policy changed; explicit review required")
+        halt_result = core._activate_trade_protection(
+            "local margin policy changed; explicit review required", "POLICY_REVIEW"
+        )
         if halt_result.get("adapter_file_failures"):
             raise BridgeError(
                 "HALT_FILE_FAILED",

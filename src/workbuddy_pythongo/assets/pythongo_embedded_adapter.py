@@ -72,7 +72,6 @@ except ImportError:
 
 
 RUN_MODES = ("OBSERVE_ONLY", "SIM_SIGNAL", "MANUAL_LIVE", "LIMITED_AUTO")
-P0_ISOLATED_NOTIONAL_CAPS = {("SHFE", "au2610"): 900000.0}
 P0_ISOLATED_MARGIN_GUARD_RATIO = 0.20
 P0_VALIDATION_NOTIONAL_CAP = 1000000.0
 P0_VALIDATION_LEG_MAPPINGS = {
@@ -803,10 +802,11 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             raise RuntimeError("P0 notional cap is invalid")
         if isolated_cap:
             if (
-                float(notional_cap) != P0_ISOLATED_NOTIONAL_CAPS.get((command["exchange"], command["instrument_id"]))
+                float(notional_cap) <= 0
+                or float(notional_cap) > P0_VALIDATION_NOTIONAL_CAP
                 or margin_guard_ratio != P0_ISOLATED_MARGIN_GUARD_RATIO
             ):
-                raise RuntimeError("P0 isolated cap binding is not authorized")
+                raise RuntimeError("P0 isolated cap is outside the signed validation ceiling")
         elif float(notional_cap) != float(self._config["adapter_max_order_notional"]) or margin_guard_ratio is not None:
             raise RuntimeError("P0 standard cap does not match Adapter hard limit")
         quote = self._quote(command["exchange"], command["instrument_id"])
@@ -890,7 +890,6 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             command["account_alias"] != self._config["account_alias"]
             or command["account_type"] != "FUTURES"
             or command["adapter_instance"] != self._config["adapter_instance"]
-            or (command["exchange"], command["instrument_id"]) != ("SHFE", "au2610")
         ):
             raise RuntimeError("P0 validation leg binding mismatch")
         mapping = P0_VALIDATION_LEG_MAPPINGS.get(command["action"])
@@ -937,7 +936,8 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
 
         positions = [
             item for item in self._positions(simple=False)
-            if item.get("exchange") == "SHFE" and item.get("instrument_id") == "au2610"
+            if item.get("exchange") == command["exchange"]
+            and item.get("instrument_id") == command["instrument_id"]
         ]
         long_position = sum(int((item.get("long") or {}).get("position") or 0) for item in positions)
         short_position = sum(int((item.get("short") or {}).get("position") or 0) for item in positions)

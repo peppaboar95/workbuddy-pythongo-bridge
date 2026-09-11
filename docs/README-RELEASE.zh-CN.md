@@ -1,4 +1,4 @@
-# WorkBuddy-PythonGO Bridge 0.3.5 操作手册
+# WorkBuddy-PythonGO Bridge 0.3.6 操作手册
 
 这是 WorkBuddy 与无限易 PythonGO v2 之间的本机期货桥接。本文按实际操作顺序说明首次安装、观察模式验收、P0 Profile、模式切换和 `LIMITED_AUTO` 许可。
 
@@ -16,7 +16,7 @@
 必须同时区分两类状态：
 
 - **运行模式**：`OBSERVE_ONLY`、`SIM_SIGNAL`、`MANUAL_LIVE`、`LIMITED_AUTO`；
-- **熔断状态**：独立于运行模式。熔断开启时，任何普通新单都被拒绝。
+- **交易保护状态**：独立于运行模式。`SETUP_LOCK` 表示交易尚未启用，不是事故；`ACCOUNT_CHANGE`、`POLICY_REVIEW` 与 `INCIDENT_HALT` 表示必须复核的强保护。任何保护开启时，普通新单都被拒绝，但健康的查询链路仍可使用。
 
 `LIMITED_AUTO` 还分为两步：
 
@@ -27,15 +27,15 @@
 
 ## 2. 本文命令使用的路径
 
-下面的命令假设运行目录为 `C:\WorkBuddyPythonGO`。先在 PowerShell 中设置：
+发布包默认把运行目录固定到 `%LOCALAPPDATA%\WorkBuddyPythonGO\runtime`，因此换一个目录解压新版 ZIP 也不会生成第二套密钥和配置。下面的命令先读取这个默认位置：
 
 ```powershell
-$BridgeRoot = "C:\WorkBuddyPythonGO"
+$BridgeRoot = Join-Path $env:LOCALAPPDATA "WorkBuddyPythonGO\runtime"
 $BridgeConfig = Join-Path $BridgeRoot "config\bridge.json"
 $ReadyDir = Join-Path $BridgeRoot "pythongo_ready\pythongo_futures_01"
 ```
 
-如果直接使用源码仓库，则第一行改为你实际创建的运行目录，例如：
+如果直接使用源码仓库，也可以把第一行改为你实际创建的运行目录，例如：
 
 ```powershell
 $BridgeRoot = "C:\WorkBuddyPythonGO\runtime"
@@ -52,23 +52,24 @@ $BridgeRoot = "C:\WorkBuddyPythonGO\runtime"
 3. 阅读首页说明，按任意键继续；
 4. 安装器检查 Python 3.10+，使用包内 wheel 安装 Bridge；
 5. Bridge 使用 Python 标准库直接下载九期网电脑版保证金手续费表，不安装任何额外采集依赖；
-6. 中文向导依次询问以下内容：
-   - 运行目录；
-   - 是否合并 WorkBuddy MCP 配置及配置文件路径；
+6. 中文向导依次处理以下内容：
+   - 从上次保存位置、旧安装包 runtime 或稳定默认位置中选择运行目录；
+   - 自动发现常见 WorkBuddy MCP 配置，并询问是否合并；
    - 是否绑定 `main_futures` 投资者账号（这是账号而非密码，输入会明文显示，完整账号仅写入本机 Adapter 配置）；
+   - 自动发现无限易 `pyStrategy\self_strategy` 目录，由用户选定后安全部署 Adapter；
    - 是否创建桌面启动和状态入口；保证金数据按需更新已合并到启动入口。
 
 方括号中的值是默认值，直接按 Enter 即可采用。向导不会启动 Worker、无限易或 WorkBuddy，不会签名 Profile，也不会开放交易。
 
-已绑定账号的运行目录重复运行向导时，向导会直接保留原账号指纹，不再询问重新绑定，因此不会因重复安装而作废 Profile 或触发本地熔断。只有目标投资者账号确实变化时，才按第 6.1 节使用 `bind-investor`。日常运行应使用“启动PythonGO桥接.cmd”，不要把“首次安装与配置.cmd”当作日常启动器。
+首次绑定后，状态显示“交易尚未启用”，查询无需先完成 P0，也无需解除这个保护。已绑定账号的运行目录重复运行向导时，向导会直接保留原账号指纹，不再询问重新绑定，因此不会因重复安装而作废 Profile 或触发事故熔断。只有目标投资者账号确实变化时，才按第 6.1 节使用 `bind-investor`。日常运行应使用“启动PythonGO桥接.cmd”，不要把“首次安装与配置.cmd”当作日常启动器。
 
 安装窗口无论成功或失败都会停留在“按任意键关闭”，不会立即消失。失败时保留窗口中的第一条明确错误。
 
 ### 3.2 源码安装
 
 ```powershell
-python -m pip install --upgrade --force-reinstall --no-deps --no-build-isolation .
-python -m workbuddy_pythongo.bootstrap --root C:\WorkBuddyPythonGO
+python -m pip install --user --upgrade --force-reinstall --no-deps --no-build-isolation .
+python -m workbuddy_pythongo.desktop setup --root "$env:LOCALAPPDATA\WorkBuddyPythonGO\runtime"
 ```
 
 保证金手续费日更只使用 Python 标准库，不需要另装采集包。
@@ -124,7 +125,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig refresh-margin-refer
 
 `margin_reference_refresh_max_age_hours` 是本机刷新硬门禁，默认 36 小时；过期、签名失败、哈希不一致或精确合约不匹配时不会启用回退值。九期网页面的“手续费更新时间”只按独立的 `margin_reference_source_warn_age_hours` 生成软告警，默认 168 小时；该时间过旧、缺失或无法解析都不会单独阻止使用已签名且本机刷新有效的保证金数据。
 
-v0.3.4 为保证金策略增加独立代次和哈希。旧运行目录缺少这些字段时，日常刷新和 Worker 启动会以 `MARGIN_POLICY_MIGRATION_REQUIRED` 停止，不会暗中迁移。运行：
+v0.3.4 为保证金策略增加独立代次和哈希。v0.3.5 起，安装/升级向导会自动补齐不改变风险语义的跟踪字段，且不修改 Profile、模式或交易保护。若绕过向导，或检测到旧时效字段、路径、安全系数、验签要求等实质变化，刷新和 Worker 启动仍会以 `MARGIN_POLICY_MIGRATION_REQUIRED` 停止，并显示下面的复核命令：
 
 ```powershell
 python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-policy `
@@ -137,11 +138,13 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 ## 4. 部署 PythonGO Adapter
 
+首次配置向导会搜索常见无限易安装位置。选择正确的 `pyStrategy\self_strategy` 后，向导仅部署两个必要文件；同名旧文件先备份为 `.bak.<时间戳>`，旧的 `pythongo_adapter.json` 和 `pythongo_profile.json` 也只会改名保留，不会直接删除。若自动发现失败或当时跳过，再按下面步骤手工操作。
+
 1. 完整退出无限易；
 2. 仅把 `$ReadyDir` 中的两个部署文件复制到目标无限易 PythonGO 的 `pyStrategy\self_strategy`：
    - `WorkBuddyPythonGOAdapter.py`；
    - `pythongo_adapter.path`。
-3. 删除 `self_strategy` 中旧的 `pythongo_adapter.json` 和 `pythongo_profile.json`；两个 JSON 只保留在 `$ReadyDir`；
+3. 把 `self_strategy` 中旧的 `pythongo_adapter.json` 和 `pythongo_profile.json` 改名为带时间戳的 `.bak` 备份；两个活动 JSON 只保留在 `$ReadyDir`；
 4. `pythongo_adapter.path` 保存 ready 目录中 `pythongo_adapter.json` 的绝对路径，Adapter 由此继续定位 Profile、密钥和运行数据；
 5. 启动无限易并登录目标账号；
 6. 在 PythonGO 中加载并启动独立的 WorkBuddy Adapter 策略实例。
@@ -150,7 +153,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 配置、Profile 和模式变化时无需再复制 JSON，但 Adapter 只在初始化时加载它们，仍应完整退出并重启无限易。覆盖 Python 文件后只停止并重新运行策略可能继续使用旧模块缓存，源码更新同样必须完整重启。
 
-从旧版本升级到 v0.3.4 后先运行上面的显式保证金策略迁移，再完整重启无限易。若结果显示 `material_change=true`，应保持本地熔断，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次迁移重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
+升级到 v0.3.6 时优先重新运行 CMD 安装器；向导会自动处理无风险跟踪字段并部署新 Adapter。若结果显示 `material_change=true`，应保持 `POLICY_REVIEW` 保护，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次迁移重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
 
 ## 5. 第一次启动：只使用 OBSERVE_ONLY
 
@@ -195,9 +198,9 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig doctor
 
 如果文件已签名但心跳仍是 `UNVERIFIED`，说明无限易仍在运行旧模块或未重新加载 ready 内容；确认定位文件后完整重启无限易，无需复制 JSON 或 Profile。
 
-## 6. 完成 P0、签名 Profile 和解除熔断
+## 6. 需要交易时：完成 P0、签名 Profile 和解除交易保护
 
-非观察模式必须使用目标电脑、目标账号、目标无限易/PythonGO/柜台组合完成 P0。不能只把任意非空构建字符串写入 Profile 后签名。
+只使用查询时无需执行本章。非观察模式必须使用目标电脑、目标账号、目标无限易/PythonGO/柜台组合完成 P0。不能只把任意非空构建字符串写入 Profile 后签名。
 
 ### 6.1 绑定投资者账号
 
@@ -207,12 +210,14 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig doctor
 python -m workbuddy_pythongo.console --config $BridgeConfig bind-investor main_futures --confirm BIND-ACCOUNT
 ```
 
-账号会明文显示，方便核对；这是投资者账号，不是登录密码。绑定操作会：
+账号会明文显示，方便核对；这是投资者账号，不是登录密码。首次绑定会：
 
 - 更新本机账号指纹；
-- 把旧 Profile 重置为未验证；
-- 开启耐久熔断；
+- 保持 Profile 未验证；
+- 写入 `SETUP_LOCK`，明确表示“交易尚未启用”，数据库不记录事故熔断；
 - 保持 `OBSERVE_ONLY`。
+
+如果已有账号指纹真正变化，重绑定仍会重置旧 Profile，并开启 `ACCOUNT_CHANGE` 强保护；这属于必须复核的安全事件。
 
 如果输入账号与 Worker 和 Adapter 中已批准的指纹完全一致，`bind-investor` 是幂等无操作：不重置 Profile、不改变模式、不开启本地熔断。只有账号指纹确实发生变化，或 Worker/Adapter 绑定已不一致需要修复时，才执行上述安全重绑定流程。
 
@@ -246,21 +251,21 @@ FUTURES:<ACTION>:LIMIT:GFD
 python -m workbuddy_pythongo.console --config $BridgeConfig p0-test-order main_futures CFFEX IF2609 --confirm AUTHORIZE-P0-ONE-LOT
 ```
 
-当前项目曾为 `SHFE:au2610` 明确批准过一次 90 万元隔离报撤额度：
+若目标合约的一手名义金额高于账户常规单笔限额，可为这一次 P0 命令明确给出不超过 100 万元的隔离额度，例如：
 
 ```powershell
-python -m workbuddy_pythongo.console --config $BridgeConfig p0-test-order main_futures SHFE au2610 --isolated-notional-cap 900000 --confirm AUTHORIZE-P0-ONE-LOT
+python -m workbuddy_pythongo.console --config $BridgeConfig p0-test-order main_futures EXCHANGE CONTRACT --isolated-notional-cap 900000 --confirm AUTHORIZE-P0-ONE-LOT
 ```
 
-隔离额度只属于该 P0 命令，不会提高普通模式的 `max_order_notional`。
+目标交易所、合约和额度都会进入最长 30 秒的一次性签名授权与命令哈希；Worker 和 Adapter 分别校验。隔离额度只属于该 P0 命令，不会提高普通模式的 `max_order_notional`。
 
 逐腿成交验证：
 
 ```powershell
-python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures SHFE au2610 OPEN_LONG --confirm AUTHORIZE-P0-TRADE-LEG
-python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures SHFE au2610 CLOSE_TODAY_LONG --confirm AUTHORIZE-P0-TRADE-LEG
-python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures SHFE au2610 OPEN_SHORT --confirm AUTHORIZE-P0-TRADE-LEG
-python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures SHFE au2610 CLOSE_TODAY_SHORT --confirm AUTHORIZE-P0-TRADE-LEG
+python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures EXCHANGE CONTRACT OPEN_LONG --confirm AUTHORIZE-P0-TRADE-LEG
+python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures EXCHANGE CONTRACT CLOSE_TODAY_LONG --confirm AUTHORIZE-P0-TRADE-LEG
+python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures EXCHANGE CONTRACT OPEN_SHORT --confirm AUTHORIZE-P0-TRADE-LEG
+python -m workbuddy_pythongo.console --config $BridgeConfig p0-validation-leg main_futures EXCHANGE CONTRACT CLOSE_TODAY_SHORT --confirm AUTHORIZE-P0-TRADE-LEG
 ```
 
 每腿都必须单独核对 ACK、Order、Trade、唯一 memo 和持仓变化。任何部分成交、未知结果、持仓不符或回报歧义都应停止下一腿并人工对账。
