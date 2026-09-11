@@ -13,6 +13,7 @@ from .config import load_config
 from .console import bind_investor, get_non_observe_mode_blockers, set_mode
 from .doctor import run_doctor
 from .errors import BridgeError
+from .margin_reference import migrate_margin_policy_if_safe
 from .mcp_server import WorkerClient
 from .util import atomic_write_bytes
 from .worker import main as worker_main
@@ -207,7 +208,7 @@ def _ask_path(prompt, default, input_func=input):
     return os.path.abspath(os.path.expandvars(value or default))
 
 
-def run_setup(default_root, input_func=input, getpass_func=input, default_mcp_path=None):
+def run_setup(default_root, input_func=input, default_mcp_path=None):
     _header("WorkBuddy-PythonGO首次配置向导")
     print("所有新环境固定从OBSERVE_ONLY开始。")
     print("向导不会启动Worker、无限易或Adapter，不会签名Profile，也不会开放交易。")
@@ -222,6 +223,11 @@ def run_setup(default_root, input_func=input, getpass_func=input, default_mcp_pa
     else:
         print("检测到已有runtime，已安全复用；配置、密钥、token和Profile均保持原值。")
     print("运行目录：%s" % root)
+    migration_result = migrate_margin_policy_if_safe(config_path)
+    if migration_result.get("review_required"):
+        print("检测到保证金风险策略实质变化；安装器未自动修改，请稍后在修复流程中复核。")
+    elif migration_result.get("migrated"):
+        print("已自动补齐保证金策略跟踪字段；Profile保持原值，未开启交易保护。")
 
     print("\n[向导 2/5] 配置WorkBuddy MCP")
     print("合并操作只新增或更新mcpServers.workbuddy-pythongo，并保留其他MCP服务。")
@@ -244,10 +250,10 @@ def run_setup(default_root, input_func=input, getpass_func=input, default_mcp_pa
     binding_missing = "REPLACE" in account.investor_fingerprint.upper()
     bind_result = None
     if binding_missing:
-        print("账号仅在本机输入；输入内容会明文显示，请确认周围环境安全。")
+        print("请输入投资者账号（不是密码）；内容会明文显示，便于核对。")
         print("完整账号写入本机Adapter配置；Bridge主配置仅保存HMAC指纹。")
         if _ask_yes_no("是否现在绑定投资者账号", True, input_func):
-            investor_id = getpass_func("请输入完整投资者账号（明文显示）：").strip()
+            investor_id = input_func("请输入完整投资者账号（明文显示）：").strip()
             if not investor_id:
                 raise BridgeError("INVALID_REQUEST", "投资者账号不能为空")
             bind_result = bind_investor(config_path, "main_futures", investor_id, "BIND-ACCOUNT")
@@ -285,6 +291,7 @@ def run_setup(default_root, input_func=input, getpass_func=input, default_mcp_pa
         "root": root,
         "config": config_path,
         "ready_dir": init_result["ready_dir"],
+        "margin_policy_migration": migration_result,
         "mcp": mcp_result,
         "binding": bind_result,
         "shortcuts": shortcut_result,
@@ -339,14 +346,17 @@ def _status_issues(probe):
     issues = []
     if health.get("worker") != "READY":
         issues.append({"code": "WORKER_NOT_READY", "message": "Worker尚未就绪"})
-    if health.get("halted"):
-        issues.append({"code": "TRADING_HALTED", "message": "桥接已熔断：%s" % (health.get("halt_reason") or "未记录原因")})
+    if health.get("halted") and health.get("mode") != "OBSERVE_ONLY":
+        issues.append({"code": "TRADING_HALTED", "message": "交易保护已开启：%s" % (health.get("halt_reason") or "未记录原因")})
     accounts = health.get("accounts") or []
     if not accounts:
         issues.append({"code": "NO_ENABLED_ACCOUNT", "message": "没有启用账户的状态数据"})
     for account in accounts:
         alias = account.get("account_alias", "<unknown>")
-        if not account.get("ready"):
+        observation_ready = account.get("observation_ready")
+        if observation_ready is None:
+            observation_ready = account.get("ready")
+        if not observation_ready:
             issues.append({"code": "ADAPTER_NOT_READY", "message": "%s的PythonGO Adapter未就绪" % alias})
         depths = account.get("queue_depths") or {}
         dead_letters = int(depths.get("dead_letter", 0) or 0)
@@ -375,15 +385,21 @@ def print_status_human(config_path, probe, issues):
         health = (probe.get("response") or {}).get("data") or {}
         mode = health.get("mode", "UNKNOWN")
         print("运行模式：%s" % mode)
-        if health.get("halted"):
-            print("熔断状态：已熔断；原因：%s" % (health.get("halt_reason") or "未记录"))
+        protection = health.get("trade_protection") or {}
+        if health.get("halted") or protection.get("active"):
+            print("交易保护：已开启；原因：%s" % (health.get("halt_reason") or protection.get("reason") or "未记录"))
+            if health.get("observation_ready") or protection.get("queries_available"):
+                print("查询状态：可用；仅阻止新的交易提交。")
         elif mode == "OBSERVE_ONLY":
-            print("安全说明：当前只允许查询、预览和空跑闭环。")
+            print("交易保护：观察模式；查询、预览和空跑闭环可用。")
         print("\n账户与PythonGO Adapter：")
         for account in health.get("accounts") or []:
             depths = account.get("queue_depths") or {}
-            print("  - %s：%s" % (account.get("account_alias", "<unknown>"), "已就绪" if account.get("ready") else "未就绪"))
-            print("      Adapter=%s；心跳=%s；模式=%s；Profile=%s；本地熔断=%s" % (
+            observation_ready = account.get("observation_ready")
+            if observation_ready is None:
+                observation_ready = account.get("ready")
+            print("  - %s：查询链路%s" % (account.get("account_alias", "<unknown>"), "可用" if observation_ready else "不可用"))
+            print("      Adapter=%s；心跳=%s；模式=%s；Profile=%s；交易保护=%s" % (
                 account.get("adapter_status", "UNKNOWN"),
                 _seconds_text(account.get("heartbeat_age_seconds")),
                 account.get("adapter_mode") or "UNKNOWN",
@@ -406,7 +422,12 @@ def print_status_human(config_path, probe, issues):
         for issue in issues:
             print("  - %s" % issue["message"])
     else:
-        print("Worker和所有启用账户的PythonGO Adapter均已就绪。")
+        health = (probe.get("response") or {}).get("data") or {}
+        protection = health.get("trade_protection") or {}
+        if health.get("mode") == "OBSERVE_ONLY" and (health.get("halted") or protection.get("active")):
+            print("Worker和查询链路正常；新的交易提交受保护。")
+        else:
+            print("Worker和所有启用账户的PythonGO Adapter均已就绪。")
 
 
 def print_doctor_human(report):
@@ -433,7 +454,7 @@ def get_start_mode_availability(config_path):
 def _blocker_summary(blockers):
     labels = {
         "PROFILE_INVALID": "P0 Profile未验证或绑定不完整",
-        "TRADING_HALTED": "本地熔断尚未解除",
+        "TRADING_HALTED": "交易保护尚未解除",
     }
     return "；".join(labels.get(item.get("code"), item.get("message", "门禁未通过")) for item in blockers)
 
@@ -507,7 +528,7 @@ def start_desktop(config_path):
     print("无限易通过pythongo_adapter.path直接读取ready配置，无需复制JSON或Profile。")
     print("模式或Profile变化后仍必须完整重启无限易，使Adapter重新加载。")
     if mode == "OBSERVE_ONLY":
-        print("当前只允许查询、预览和空跑闭环；本地熔断状态不会被启动器解除。")
+        print("当前可使用查询、预览和空跑闭环；交易保护状态不会被启动器解除。")
     elif mode == "MANUAL_LIVE":
         print("仍需为每笔预览授权，或创建1至60分钟人工会话。")
     elif mode == "LIMITED_AUTO":

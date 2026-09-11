@@ -211,9 +211,16 @@ class BridgeCore:
                     payload.get("margin_policy_generation") == expected_policy_generation and
                     payload.get("margin_policy_hash") == expected_policy_hash
                 )
-                ready = bool(
+                connected = bool(
                     heartbeat and heartbeat["status"] == "READY" and heartbeat_age <= 15
-                    and mode_match and policy_match and not bool((payload or {}).get("local_halt"))
+                )
+                observation_ready = bool(connected and mode_match and policy_match)
+                trade_ready = bool(
+                    observation_ready and profile_status == "VALID"
+                    and not halted and not bool((payload or {}).get("local_halt"))
+                )
+                ready = bool(
+                    observation_ready and not bool((payload or {}).get("local_halt"))
                 )
                 if mode != "OBSERVE_ONLY" and profile_status != "VALID":
                     ready = False
@@ -229,12 +236,20 @@ class BridgeCore:
                     "expected_margin_policy_generation": expected_policy_generation,
                     "profile_status": profile_status,
                     "local_halt": bool((payload or {}).get("local_halt")),
+                    "connected": connected,
+                    "observation_ready": observation_ready,
+                    "trade_ready": trade_ready,
                     "ready": ready,
                     "queue_depths": self.file_queue.depths(account.adapter_instance),
                 })
             unresolved = connection.execute(
                 "SELECT COUNT(*) AS n FROM trade_intents WHERE status='SUBMIT_UNKNOWN'"
             ).fetchone()["n"]
+            observation_ready = bool(accounts) and all(item["observation_ready"] for item in accounts)
+            trade_ready = bool(
+                mode != "OBSERVE_ONLY" and accounts
+                and all(item["trade_ready"] for item in accounts)
+            )
             return {
                 "worker": "READY",
                 "mode": mode,
@@ -242,6 +257,14 @@ class BridgeCore:
                 "halt_reason": self._state(connection, "halt_reason", ""),
                 "accounts": accounts,
                 "unresolved_submit_unknown": unresolved,
+                "observation_ready": observation_ready,
+                "trade_ready": trade_ready,
+                "trade_protection": {
+                    "active": bool(halted or any(item["local_halt"] for item in accounts)),
+                    "reason": self._state(connection, "halt_reason", ""),
+                    "queries_available": observation_ready,
+                    "blocked_operation": "NEW_TRADES",
+                },
                 "ready": bool(accounts) and all(item["ready"] for item in accounts) and not halted,
             }
 

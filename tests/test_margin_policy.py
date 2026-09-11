@@ -9,7 +9,11 @@ from workbuddy_pythongo.bootstrap import initialize
 from workbuddy_pythongo.errors import BridgeError
 from workbuddy_pythongo.manager import main as manager_main
 from workbuddy_pythongo.margin_policy import margin_policy_hash
-from workbuddy_pythongo.margin_reference import migrate_margin_policy, refresh_margin_reference
+from workbuddy_pythongo.margin_reference import (
+    migrate_margin_policy,
+    migrate_margin_policy_if_safe,
+    refresh_margin_reference,
+)
 from workbuddy_pythongo.worker import build_runtime
 
 
@@ -133,6 +137,42 @@ class MarginPolicyTests(unittest.TestCase):
             self.assertTrue(result["profiles_preserved"])
             with open(profile_path, "rb") as stream:
                 self.assertEqual(stream.read(), profile_before)
+
+    def test_safe_installer_migration_declines_material_change_without_mutation(self):
+        with tempfile.TemporaryDirectory() as root:
+            config_path, adapter_path, profile_path = _paths(initialize(root))
+            with open(adapter_path, "r", encoding="utf-8") as stream:
+                adapter = json.load(stream)
+            adapter["margin_reference_max_age_hours"] = adapter.pop(
+                "margin_reference_refresh_max_age_hours"
+            )
+            adapter.pop("margin_reference_source_warn_age_hours")
+            adapter.pop("margin_reference_policy_generation")
+            adapter.pop("margin_reference_policy_hash")
+            with open(adapter_path, "w", encoding="utf-8") as stream:
+                json.dump(adapter, stream, ensure_ascii=False)
+            with open(adapter_path, "rb") as stream:
+                adapter_before = stream.read()
+            with open(profile_path, "rb") as stream:
+                profile_before = stream.read()
+
+            result = migrate_margin_policy_if_safe(config_path)
+
+            self.assertTrue(result["automatic"])
+            self.assertTrue(result["review_required"])
+            self.assertTrue(result["material_change"])
+            self.assertFalse(result["migrated"])
+            self.assertFalse(result["halted_for_policy_change"])
+            with open(adapter_path, "rb") as stream:
+                self.assertEqual(stream.read(), adapter_before)
+            with open(profile_path, "rb") as stream:
+                self.assertEqual(stream.read(), profile_before)
+            _, database, _ = build_runtime(config_path, require_margin_policy=False)
+            with database.connect() as connection:
+                halted = connection.execute(
+                    "SELECT value FROM system_state WHERE key='halted'"
+                ).fetchone()["value"]
+            self.assertEqual(halted, "false")
 
     def test_tracking_generation_never_moves_backwards(self):
         with tempfile.TemporaryDirectory() as root:

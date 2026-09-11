@@ -1,4 +1,4 @@
-# WorkBuddy-PythonGO Bridge 0.3.4 操作手册
+# WorkBuddy-PythonGO Bridge 0.3.5 操作手册
 
 这是 WorkBuddy 与无限易 PythonGO v2 之间的本机期货桥接。本文按实际操作顺序说明首次安装、观察模式验收、P0 Profile、模式切换和 `LIMITED_AUTO` 许可。
 
@@ -55,7 +55,7 @@ $BridgeRoot = "C:\WorkBuddyPythonGO\runtime"
 6. 中文向导依次询问以下内容：
    - 运行目录；
    - 是否合并 WorkBuddy MCP 配置及配置文件路径；
-   - 是否绑定 `main_futures` 投资者账号（输入内容会明文显示，完整账号仅写入本机 Adapter 配置）；
+   - 是否绑定 `main_futures` 投资者账号（这是账号而非密码，输入会明文显示，完整账号仅写入本机 Adapter 配置）；
    - 是否创建桌面启动和状态入口；保证金数据按需更新已合并到启动入口。
 
 方括号中的值是默认值，直接按 Enter 即可采用。向导不会启动 Worker、无限易或 WorkBuddy，不会签名 Profile，也不会开放交易。
@@ -158,7 +158,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 ### 5.1 使用桌面入口
 
-双击 `启动PythonGO桥接.cmd`。启动器会先静默尝试更新当日签名保证金表，不显示 CSV 加载过程或成功结果；普通更新失败只显示一行警告，不会绕过风控。若检测到旧保证金策略配置，启动器会明确显示迁移命令并停止，不会继续进入模式菜单。
+双击 `启动PythonGO桥接.cmd`。启动器会先静默尝试更新当日签名保证金表，不显示 CSV 加载过程或成功结果；普通更新失败只显示一行警告，不会绕过风控。安装/升级向导会自动补齐无风险的保证金策略跟踪字段；如果用户跳过升级向导，或检测到实质策略变化，启动器仍会停止并提示复核，不会继续进入模式菜单。
 
 ```text
 1. OBSERVE_ONLY
@@ -186,6 +186,8 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig doctor
 
 观察模式下，未签名 Profile 可以显示 `UNVERIFIED`；此时查询、同步、Preview 和空跑闭环仍可使用，普通报单不能使用。
 
+状态页分别显示连接、观察和交易就绪度。即使交易保护已经开启，只要 `observation_ready=true`，状态页会显示“查询状态：可用；仅阻止新的交易提交”，不会把整个 Adapter 标为故障。`trade_ready=false` 只表示当前不能推进新的交易，并不表示查询链路损坏。
+
 注意两种 Profile 状态不是一回事：
 
 - `doctor` 的 `profile_signature=通过`：ready 目录中的文件能通过静态签名和绑定校验；
@@ -205,7 +207,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig doctor
 python -m workbuddy_pythongo.console --config $BridgeConfig bind-investor main_futures --confirm BIND-ACCOUNT
 ```
 
-账号会隐藏输入。绑定操作会：
+账号会明文显示，方便核对；这是投资者账号，不是登录密码。绑定操作会：
 
 - 更新本机账号指纹；
 - 把旧 Profile 重置为未验证；

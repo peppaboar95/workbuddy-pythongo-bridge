@@ -1,6 +1,6 @@
 # WorkBuddy 与无限易（PythonGO）桥接程序设计
 
-> 状态：Design v0.3.4（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）
+> 状态：Design v0.3.5（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）
 > 日期：2026-08-27  
 > 适用范围：Windows、Tencent WorkBuddy、无限易客户端、PythonGO v2、期货行情监控及模拟/实盘交易  
 > 风险声明：本文描述交易基础设施，不构成投资建议。任何实盘能力必须经过只读、空跑、模拟、人工确认和小额灰度验证。

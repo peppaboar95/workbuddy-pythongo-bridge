@@ -3,7 +3,7 @@
 <head data-page-node-id="fOo47UQLpgRyGZPr9lj9V0">
 <meta charset="utf-8" data-page-node-id="CQ7l9wpfwU2sA43dWFyt4Q">
 <meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="RVLkAL83WWN6SiW3BWZaZp">
-<title>WorkBuddy-PythonGO Bridge · Python 接口参考文档 v0.3.4</title>
+<title>WorkBuddy-PythonGO Bridge · Python 接口参考文档 v0.3.5</title>
 <style>
   :root{
     --bg:#f6f7f9;
@@ -227,7 +227,7 @@
     <span class="chip chip-put" data-page-node-id="JjZhEqfIEHJZgaIWUCvDpx">PUT</span><span data-page-node-id="ME5QjCFLxMZqTobtVVP1Kv">授权</span>
     <span class="chip chip-del" data-page-node-id="IqKFK6X4XJXyEnEFKcKLm8">DEL</span><span data-page-node-id="pkAunOas1tRIPDwSv4NxR4">撤销/熔断</span>
   </div>
-  <span class="ver-badge" data-page-node-id="TcRLDUddddDHyCIq3iwoR2">v0.3.4</span>
+  <span class="ver-badge" data-page-node-id="TcRLDUddddDHyCIq3iwoR2">v0.3.5</span>
 </header>
 
 <div class="backdrop" id="backdrop" data-page-node-id="MW87O3m6zOdNJyqtj4yi3S"></div>
@@ -323,7 +323,7 @@
       </p>
 
       <div class="facts" data-page-node-id="QTAJaMDQniiodzYdLpJAWl">
-        <div class="fact" data-page-node-id="i9ii7esnRjBDBn0nbAkrEA"><div class="k" data-page-node-id="610ktC4TBv30YkGTm2JNYb">版本</div><div class="v" data-page-node-id="453xEodItFHQc2eqhnUiOh">0.3.4</div></div>
+        <div class="fact" data-page-node-id="i9ii7esnRjBDBn0nbAkrEA"><div class="k" data-page-node-id="610ktC4TBv30YkGTm2JNYb">版本</div><div class="v" data-page-node-id="453xEodItFHQc2eqhnUiOh">0.3.5</div></div>
         <div class="fact" data-page-node-id="PMoKDWc3LZuEqIgFfDQGn6"><div class="k" data-page-node-id="GlBi3f6xPEaNK7p6ht6VAh">传输</div><div class="v" data-page-node-id="PARP3WNr0MOl17qqm7LA4w">POST http://127.0.0.1:17662/rpc</div></div>
         <div class="fact" data-page-node-id="MjH6TwK7vH2aFd5qXelCeC"><div class="k" data-page-node-id="0RglDBVCmBH9GMOcpnAPCB">鉴权</div><div class="v" data-page-node-id="DDofO59pAUj6rkBK234h0T">Authorization: Bearer &lt;token&gt;</div></div>
         <div class="fact" data-page-node-id="zEDY5iznqSA7BzRJ4WKHWE"><div class="k" data-page-node-id="9J7XRUi86sB7tzEJTEN52B">方法数量</div><div class="v" data-page-node-id="gewth0TacK0upYcpb85Piy">31 个（MCP 工具同构）</div></div>
@@ -384,8 +384,8 @@
 config, database, core = build_runtime("config/bridge.json")
 
 health = core.pythongo_health()
-if not health["ready"]:
-    raise SystemExit("bridge not ready: %s" % health)
+if not health["observation_ready"]:
+    raise SystemExit("bridge observation path not ready: %s" % health)
 
 alias = core.list_account_aliases()[0]["account_alias"]
 snap  = core.get_account_snapshot(alias)
@@ -583,7 +583,7 @@ except BridgeError as exc:
           <h3 data-page-node-id="FYb7uUlTBezpbhW6HxFxbX">pythongo_health</h3>
           <span class="sig" data-page-node-id="DAg4DVNpYUFSac7TVf0iS7">core.pythongo_health()</span>
         </div>
-        <p class="ep-desc" data-page-node-id="1wmUr4MPNGhgmsq92PoCJE">返回 Worker、Adapter、队列、模式、Profile 与熔断的整体健康状态。任何账户心跳超时、模式不匹配、Profile 无效或本地熔断时 <code data-page-node-id="hwDGEZS7VUSYOO957GtqhB">ready</code> 为 <code data-page-node-id="ZMJMxel40aURzaADXHvFuJ">false</code>。</p>
+        <p class="ep-desc" data-page-node-id="1wmUr4MPNGhgmsq92PoCJE">返回 Worker、Adapter、队列、模式、Profile 与交易保护状态。<code>observation_ready</code> 单独表示查询链路可用；<code>trade_ready</code> 表示当前具备交易前置条件。本地交易保护开启时，查询链路仍可正常工作。</p>
         <div class="tags" data-page-node-id="kAggBHEgMYC0XDMmx0qdCQ"><span class="tag" data-page-node-id="AVZm0sKazCwkYGc3UUDFga">无参数</span><span class="tag" data-page-node-id="AIa4Ey13WAnPrdStT7w965">只读</span><span class="tag" data-page-node-id="RTlpFhWzCwHHP7GOXnKA65">不产生审计事件</span></div>
         <div class="ep-body" data-page-node-id="PzZ0IbjWQFTeSZxgxMxBDD">
           <div class="ep-left" data-page-node-id="9tZxRuVFHGXYFBxxLNaXcR">
@@ -596,6 +596,9 @@ except BridgeError as exc:
                   <tr data-page-node-id="PsCQHvKpdLllADKkUfAO8t"><td data-page-node-id="tTTxC0HXIWUQxhTIHJrSa2"><code data-page-node-id="2L2uM9hYemRME9zy38j29g">mode</code></td><td data-page-node-id="LSp21NeC7k8CJUuLBY7NNb">string</td><td data-page-node-id="BuWAOe73RNtuHx6m61k3Jd">当前运行模式，见<a href="#modes" data-page-node-id="vPtMDbqCgaewidxXBdbuGt">运行模式</a></td></tr>
                   <tr data-page-node-id="w9Dzt8v44kK7tGGrXVimDA"><td data-page-node-id="Upgh5P0DdARzQ2DWDFhQrZ"><code data-page-node-id="EKXNRhPiUuzmixeWsNsq6F">halted</code></td><td data-page-node-id="9ZCHT4YFBndJrFgeL05BMi">bool</td><td data-page-node-id="6VMtXbtB2KjHr7F5G71Fcd">是否处于熔断状态</td></tr>
                   <tr data-page-node-id="U5JOsfeF0BLM8BzL4tmi1S"><td data-page-node-id="vJGBWdxWXM31vamjHgX752"><code data-page-node-id="j4GI5NN98RlO1zEaC4dn1E">halt_reason</code></td><td data-page-node-id="EoWuDmlmBzgMhFt1UptzsX">string</td><td data-page-node-id="aKxmC2MrJaEctukRtBzO3A">熔断原因，未熔断时为空串</td></tr>
+                  <tr><td><code>observation_ready</code></td><td>bool</td><td>全部启用账户的连接、心跳、模式和保证金策略一致，可进行查询、同步和观察模式 Preview</td></tr>
+                  <tr><td><code>trade_ready</code></td><td>bool</td><td>当前为非观察模式，且全部账户的 Profile、交易保护和运行门禁允许继续交易流程</td></tr>
+                  <tr><td><code>trade_protection</code></td><td>object</td><td><code>active</code>、<code>reason</code>、<code>queries_available</code> 与 <code>blocked_operation</code>；明确交易受保护时查询是否仍可用</td></tr>
                   <tr data-page-node-id="ztv1UFeIqsvPIn3YPiGkDf"><td data-page-node-id="uqimeREYszVxasKba2SBFK"><code data-page-node-id="EoUCeeYKzvoHnvL3m6EHgU">accounts[]</code></td><td data-page-node-id="Xhgh7e0tg3eCkqZmZ3isRH">array</td><td data-page-node-id="BijS7vDHC3xj4E7D3cIV3D">每个启用账户一条，字段见下</td></tr>
                   <tr data-page-node-id="Ot7ZABXmVd85yLwh9gwdBB"><td data-page-node-id="3b0bTxogkMbnIMsmunDCm8"><code data-page-node-id="vOKnmUR4ZeehGp6WPG5kpR">unresolved_submit_unknown</code></td><td data-page-node-id="TjgkD8En1m7InW18624v4Q">int</td><td data-page-node-id="bjx45Pr2Nf8eGZyP9AEbWz">处于 <code data-page-node-id="5nCypDeLbGgU5QwYjNJ3XU">SUBMIT_UNKNOWN</code> 的意图数，大于 0 时应先人工核对</td></tr>
                   <tr data-page-node-id="UfqjHJ0PODwvP9IDzV4Aks"><td data-page-node-id="3dUwDO4On1BjPBPhEMDf6z"><code data-page-node-id="RHScN2GeszhqamRdrwfD2C">ready</code></td><td data-page-node-id="a7fajxAc0iSvaIad4IFKBG">bool</td><td data-page-node-id="UHVbqgFAtCnCob2iOZ9ZeO">全部账户就绪且未熔断</td></tr>
@@ -613,6 +616,9 @@ except BridgeError as exc:
                   <tr data-page-node-id="L0LmXnYoAZtvoyE510MW2C"><td data-page-node-id="1ZRma83MUOLXdGOHSlrRuT"><code data-page-node-id="l5tPaajQiJZlrQ5AGdt3Fc">adapter_mode</code> / <code data-page-node-id="znzMzjlcjilJ0N8XkELtEV">mode_match</code></td><td data-page-node-id="JoUWeciS4BGKPSdEAqH87X">string / bool</td><td data-page-node-id="hXJeWJWyXsdAuEHF62TyBV">Adapter 侧模式及是否与 Worker 一致</td></tr>
                   <tr data-page-node-id="RtyZtLdhPAsIeCxFvCVtRO"><td data-page-node-id="VVoS6AfFbTRXZda21sxdwu"><code data-page-node-id="OqmWgX1TstRieRL9MiZnFT">profile_status</code></td><td data-page-node-id="7froEsgnA4WnwCciPWlYNp">string</td><td data-page-node-id="yhGmUUrnYFiIrXupzrR7DB"><code data-page-node-id="0CIvECnfoUFtaUx1UHrneU">VALID</code> / <code data-page-node-id="l806gFrF6IgXt7BaXPatAF">INVALID</code> / <code data-page-node-id="jTulxK7D68Xn1d47eP6VEz">UNKNOWN</code>；非观察模式下必须为 <code data-page-node-id="FruyF4fRbVkvl9a3nAjz6U">VALID</code></td></tr>
                   <tr data-page-node-id="ECQ2YCrfc4YK48MnmdDYdy"><td data-page-node-id="vcLwCvEBKQGJfzxOE9yNJa"><code data-page-node-id="1fuz8g5cIshSg6prOs3cON">local_halt</code></td><td data-page-node-id="XCqzTREQ1UUME7HurUErrF">bool</td><td data-page-node-id="pCoH6Bi0YQTSFqu3qUO0Hm">Adapter 侧本地熔断标记</td></tr>
+                  <tr><td><code>connected</code></td><td>bool</td><td>Adapter 有未过期的 <code>READY</code> 心跳</td></tr>
+                  <tr><td><code>observation_ready</code></td><td>bool</td><td>该账户的查询链路、模式和保证金策略一致</td></tr>
+                  <tr><td><code>trade_ready</code></td><td>bool</td><td>该账户同时具备有效 Profile，且 Worker 与 Adapter 的交易保护均未开启</td></tr>
                   <tr data-page-node-id="ThxGNVNWzvQoclF5d8XZvL"><td data-page-node-id="h1d5b5729IX4f4PXsyBeRD"><code data-page-node-id="TDjyT9lSyq45GOEz4TOqiF">queue_depths</code></td><td data-page-node-id="NQnZAOzrF8s3HWiwWdGIyD">object</td><td data-page-node-id="uMCRcB5csrHRC4RoVy8Hl0"><code data-page-node-id="XRhZDqGibz4Hv7MNACvGBR">commands</code>、<code data-page-node-id="d4F0FLysFSG75oCoAkubmb">events</code>、<code data-page-node-id="sI799mf50AYKOvpobaCqUQ">dead_letter</code> 等队列深度</td></tr>
                   <tr data-page-node-id="1YWhFizln3HXx0eGRmC5wG"><td data-page-node-id="DtWHQtASeAkt4poi1rxZYv"><code data-page-node-id="UlL6WLyXk5YmpTZv6l8rXi">ready</code></td><td data-page-node-id="GCwxvrmQUAHxHDHjrtoJGI">bool</td><td data-page-node-id="QiJEr6DVFD1cl1tmp5JAoH">该账户是否就绪</td></tr>
                 </tbody>
@@ -623,16 +629,24 @@ except BridgeError as exc:
             <div class="code-card" data-page-node-id="ueayA4Y4ZzRVrNVt8KE315">
               <div class="code-head" data-page-node-id="L7aaMu8M49IbvK2uhNodEN"><span class="dot" data-page-node-id="BBrPq4e7Bg7N4Isy5YAXlJ"></span><span class="lab" data-page-node-id="12thnn6gwe4zET3jqULFV9">Python · 请求</span><button class="copy" type="button" data-page-node-id="uGTTGcxvDVAwSFRAMhP2Zf">复制</button></div>
 <pre data-lang="python" data-page-node-id="B1cRxO0CEHCUBDXYAGvAVG">health = core.pythongo_health()
-assert health["ready"], health["halt_reason"]
-print(health["mode"], health["unresolved_submit_unknown"])</pre>
+assert health["observation_ready"], health
+print(health["mode"], health["trade_protection"])</pre>
             </div>
             <div class="code-card" data-page-node-id="2VWsfn0kV0YEe8WHLMfCEo">
               <div class="code-head" data-page-node-id="RSeB5uBo5hElolnqr2BSy8"><span class="dot ok" data-page-node-id="vy0Man8J9uyIlVC6yDLiTK"></span><span class="lab" data-page-node-id="gvXUlUopY9FdxszfX93r9D">JSON · 响应 data</span><button class="copy" type="button" data-page-node-id="Ow5U2t2PLu6SuU6T4UAbA4">复制</button></div>
 <pre data-lang="json" data-page-node-id="EUDXDehLZYGzW2xFGxcsOc">{
   "worker": "READY",
   "mode": "OBSERVE_ONLY",
-  "halted": false,
-  "halt_reason": "",
+  "halted": true,
+  "halt_reason": "account binding changed",
+  "observation_ready": true,
+  "trade_ready": false,
+  "trade_protection": {
+    "active": true,
+    "reason": "account binding changed",
+    "queries_available": true,
+    "blocked_operation": "NEW_TRADES"
+  },
   "accounts": [
     {
       "account_alias": "main_futures",
@@ -642,8 +656,11 @@ print(health["mode"], health["unresolved_submit_unknown"])</pre>
       "adapter_mode": "OBSERVE_ONLY",
       "mode_match": true,
       "profile_status": "UNKNOWN",
-      "local_halt": false,
-      "ready": true,
+      "local_halt": true,
+      "connected": true,
+      "observation_ready": true,
+      "trade_ready": false,
+      "ready": false,
       "queue_depths": {
         "commands": 0, "command_acks": 1, "events": 0,
         "control": 0, "control_acks": 0, "dead_letter": 0
@@ -651,7 +668,7 @@ print(health["mode"], health["unresolved_submit_unknown"])</pre>
     }
   ],
   "unresolved_submit_unknown": 0,
-  "ready": true
+  "ready": false
 }</pre>
             </div>
           </div>
@@ -2716,12 +2733,22 @@ def submit_with_retry(core, trade_request, attempts=4):
 
     <section id="changelog" data-page-node-id="J6KCSDhIDkLuD2JH39NEZ6">
       <h2 data-page-node-id="MK8SGOtwYyHF3Ij3Q3Lijp">版本与变更</h2>
-      <p class="sub" data-page-node-id="JuKQ3sBGbsUDk3OMnCa9AS">版本号遵循 Semantic Versioning。当前文档对应 <strong data-page-node-id="mAb6xC2clJNlYAF2xmDxAt">0.3.4</strong>；破坏性变更会通过主版本号发布，并在发布说明中给出迁移步骤。</p>
+      <p class="sub" data-page-node-id="JuKQ3sBGbsUDk3OMnCa9AS">版本号遵循 Semantic Versioning。当前文档对应 <strong data-page-node-id="mAb6xC2clJNlYAF2xmDxAt">0.3.5</strong>；破坏性变更会通过主版本号发布，并在发布说明中给出迁移步骤。</p>
 
       <div class="timeline" data-page-node-id="X5nMupQZmIb9HT7ZWElzGA">
         <div class="tl-item">
+          <div class="date">2026-09-11</div>
+          <h5>0.3.5 — 配置与状态体验（当前）</h5>
+          <ul>
+            <li>Windows 发布包继续使用原有 CMD 一键安装方式，并从包内 wheel 安装 Bridge</li>
+            <li>投资者账号使用便于核对的明文输入，并明确提示它不是密码</li>
+            <li>升级向导自动补齐无风险的保证金策略跟踪字段，实质变化继续要求人工复核</li>
+            <li>健康接口区分连接、观察与交易就绪度，交易保护不再伪装成查询链路故障</li>
+          </ul>
+        </div>
+        <div class="tl-item">
           <div class="date">2026-09-08</div>
-          <h5>0.3.4 — 显式保证金策略迁移（当前）</h5>
+          <h5>0.3.4 — 显式保证金策略迁移</h5>
           <ul>
             <li>日常参考数据刷新不再修改 Adapter 配置、Profile、模式、熔断或授权</li>
             <li>新增 <code>migrate-margin-policy</code>，旧配置只在本机明确确认后迁移</li>
@@ -2873,7 +2900,7 @@ print(core.get_risk_limits("main_futures")["max_daily_orders"])</pre>
       </div>
 
       <div class="footnote" data-page-node-id="EcSBkYAgKAKqTmgesEbqJa">
-        本页为 <strong data-page-node-id="yOoJscIFJCqSoFKylTBjaG">workbuddy-pythongo-bridge 0.3.4</strong> 的 Python 接口参考，内容依据项目源码（<code data-page-node-id="aC1nZ4FSr3GHF2CBkXIlfL">core.py</code>、<code data-page-node-id="0bomGarC2goJACKGlLYEOL">mcp_server.py</code>、<code data-page-node-id="khPIzoB4E4XhOCkR9FHBBT">worker.py</code>、<code data-page-node-id="MCdF0hCLIYqD66YIEZ4Bct">config.py</code>、<code data-page-node-id="wi9yjs8H1clV4geTSbIPf3">futures.py</code>、<code data-page-node-id="0KSmULcdIRIyN5vRISTGb9">security.py</code> 等）与 CHANGELOG 编写，页面完全自包含、无任何外链。
+        本页为 <strong data-page-node-id="yOoJscIFJCqSoFKylTBjaG">workbuddy-pythongo-bridge 0.3.5</strong> 的 Python 接口参考，内容依据项目源码（<code data-page-node-id="aC1nZ4FSr3GHF2CBkXIlfL">core.py</code>、<code data-page-node-id="0bomGarC2goJACKGlLYEOL">mcp_server.py</code>、<code data-page-node-id="khPIzoB4E4XhOCkR9FHBBT">worker.py</code>、<code data-page-node-id="MCdF0hCLIYqD66YIEZ4Bct">config.py</code>、<code data-page-node-id="wi9yjs8H1clV4geTSbIPf3">futures.py</code>、<code data-page-node-id="0KSmULcdIRIyN5vRISTGb9">security.py</code> 等）与 CHANGELOG 编写，页面完全自包含、无任何外链。
         <br data-page-node-id="u62GWL9u2ASpqnM6uSJXrq"><br data-page-node-id="vyOTiCkGkBKPc35J1nHMlB">
         <strong data-page-node-id="box2ER2FfojVOJSpXyogEF">免责声明：</strong>本项目能够触发模拟或真实资金账户的委托，不构成投资建议，也不保证盈利。默认模式为 <code data-page-node-id="u6yNbAPjygbrO7A9app3wr">OBSERVE_ONLY</code>；
         任何非观察模式都必须先在目标无限易、PythonGO、柜台和账户组合上完成 P0 现场验收。模式名称本身不能证明当前连接的是模拟柜台。

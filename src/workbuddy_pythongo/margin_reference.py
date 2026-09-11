@@ -459,12 +459,25 @@ def ensure_margin_policy_state(config, database):
     return plans
 
 
+def migrate_margin_policy_if_safe(config_path):
+    """Apply tracking-only policy metadata during an explicit install/upgrade flow.
+
+    Material policy changes remain behind the explicit migration confirmation and
+    are never applied by routine startup or daily reference refresh.
+    """
+    return _migrate_margin_policy(config_path, allow_material=False, automatic=True)
+
+
 def migrate_margin_policy(config_path, confirm):
     if confirm != "MIGRATE-MARGIN-POLICY":
         raise BridgeError(
             "CONFIRMATION_REQUIRED",
             "--confirm必须完整等于MIGRATE-MARGIN-POLICY",
         )
+    return _migrate_margin_policy(config_path, allow_material=True, automatic=False)
+
+
+def _migrate_margin_policy(config_path, allow_material, automatic):
     config = load_config(config_path)
     plans = _adapter_margin_policy_plans(config)
 
@@ -508,6 +521,27 @@ def migrate_margin_policy(config_path, confirm):
 
     changed_plans = [plan for plan in plans if plan["changed_fields"]]
     material_change = any(plan["material_changed"] for plan in plans)
+    if material_change and not allow_material:
+        return {
+            "ok": True,
+            "migrated": False,
+            "automatic": bool(automatic),
+            "review_required": True,
+            "material_change": True,
+            "halted_for_policy_change": False,
+            "expired_previews": 0,
+            "profiles_preserved": True,
+            "accounts": [
+                {
+                    "account_alias": plan["account_alias"],
+                    "adapter_path": plan["adapter_path"],
+                    "changed_fields": plan["changed_fields"],
+                    "policy_generation": plan["policy_generation"],
+                    "policy_hash": plan["policy_hash"],
+                }
+                for plan in plans
+            ],
+        }
     halt_result = None
     if material_change:
         halt_result = core.halt_trading("local margin policy changed; explicit review required")
@@ -544,7 +578,7 @@ def migrate_margin_policy(config_path, confirm):
             "INSERT INTO audit_log(occurred_at,actor,action,details_json) VALUES(?,?,?,?)",
             (
                 now,
-                "local-console",
+                "installer" if automatic else "local-console",
                 "MIGRATE_MARGIN_POLICY",
                 json_text({
                     "material_change": material_change,
@@ -565,6 +599,8 @@ def migrate_margin_policy(config_path, confirm):
     return {
         "ok": True,
         "migrated": bool(changed_plans),
+        "automatic": bool(automatic),
+        "review_required": False,
         "material_change": material_change,
         "halted_for_policy_change": bool(halt_result),
         "expired_previews": expired_previews,

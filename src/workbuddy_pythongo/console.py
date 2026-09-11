@@ -1,5 +1,4 @@
 import argparse
-import getpass
 import json
 import os
 import sys
@@ -391,7 +390,7 @@ def main(argv=None):
         elif args.command == "clear-halt":
             result = clear_halt(args.config, args.confirm)
         elif args.command == "bind-investor":
-            investor_id = args.investor_id or getpass.getpass("Investor ID（不会回显）: ")
+            investor_id = args.investor_id or input("Investor ID（非密码，明文显示）: ")
             result = bind_investor(args.config, args.account_alias, investor_id, args.confirm)
         elif args.command == "p0-test-order":
             result = p0_test_order(
