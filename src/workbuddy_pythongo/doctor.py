@@ -3,7 +3,9 @@ import json
 import os
 from importlib import resources
 
-from .assets.pythongo_embedded_adapter import CONFIG_FIELDS, PROFILE_FIELDS
+from .assets.pythongo_embedded_adapter import (
+    CONFIG_FIELDS, PERFORMANCE_CONFIG_DEFAULTS, PROFILE_FIELDS,
+)
 from .config import load_config
 from .console import _validate_profile
 from .security import KeyRing
@@ -79,9 +81,11 @@ def run_doctor(config_path=None):
             add(prefix + "adapter_config_locator", False, exc)
         try:
             adapter = _read_json(adapter_json)
-            exact = isinstance(adapter, dict) and set(adapter) == CONFIG_FIELDS
-            add(prefix + "adapter_config_schema", exact, adapter_json)
-            if not exact:
+            fields = set(adapter) if isinstance(adapter, dict) else set()
+            required = CONFIG_FIELDS - set(PERFORMANCE_CONFIG_DEFAULTS)
+            valid = required <= fields <= CONFIG_FIELDS
+            add(prefix + "adapter_config_schema", valid, adapter_json)
+            if not valid:
                 continue
             identity_ok = (
                 adapter["account_alias"] == account.alias

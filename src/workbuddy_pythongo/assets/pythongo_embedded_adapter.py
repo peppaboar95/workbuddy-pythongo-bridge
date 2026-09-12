@@ -101,6 +101,11 @@ AUTO_CONFIG_DEFAULTS = {
     "adapter_max_auto_instrument_position_notional": 1000000.0,
     "adapter_max_auto_account_drawdown": 20000.0,
 }
+PERFORMANCE_CONFIG_DEFAULTS = {
+    "command_scan_active_ms": 100,
+    "command_scan_idle_ms": 200,
+    "pre_subscribe_instruments": [],
+}
 MARGIN_REFERENCE_DEFAULTS = {
     "margin_reference_file": "",
     "margin_reference_schema_version": 2,
@@ -121,7 +126,8 @@ MARGIN_POLICY_TRACKING_FIELDS = {
 }
 CONFIG_FIELDS = (
     BASE_CONFIG_FIELDS | set(AUTO_CONFIG_DEFAULTS) |
-    set(MARGIN_REFERENCE_DEFAULTS) | MARGIN_POLICY_TRACKING_FIELDS
+    set(PERFORMANCE_CONFIG_DEFAULTS) | set(MARGIN_REFERENCE_DEFAULTS) |
+    MARGIN_POLICY_TRACKING_FIELDS
 )
 LEGACY_MARGIN_REFERENCE_FIELDS = {"margin_reference_max_age_hours"}
 MARGIN_REFERENCE_FIELDS = {
@@ -344,8 +350,9 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             set(config) - (CONFIG_FIELDS | LEGACY_MARGIN_REFERENCE_FIELDS)
         ):
             raise RuntimeError("adapter config fields do not match the P1 schema")
-        for name, value in AUTO_CONFIG_DEFAULTS.items():
-            config.setdefault(name, value)
+        for defaults in (AUTO_CONFIG_DEFAULTS, PERFORMANCE_CONFIG_DEFAULTS):
+            for name, value in defaults.items():
+                config.setdefault(name, list(value) if isinstance(value, list) else value)
         missing_margin_fields = (set(MARGIN_REFERENCE_DEFAULTS) | MARGIN_POLICY_TRACKING_FIELDS) - set(config)
         if LEGACY_MARGIN_REFERENCE_FIELDS & set(config) or missing_margin_fields:
             raise RuntimeError(
@@ -358,6 +365,27 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
         for name in ("max_batch", "max_message_bytes", "adapter_max_order_volume", "max_snapshot_age_seconds", "max_quote_age_seconds", "heartbeat_seconds"):
             if isinstance(config[name], bool) or not isinstance(config[name], int) or config[name] <= 0:
                 raise RuntimeError("invalid integer config: " + name)
+        for name in ("command_scan_active_ms", "command_scan_idle_ms"):
+            if isinstance(config[name], bool) or not isinstance(config[name], int) or not 50 <= config[name] <= 1000:
+                raise RuntimeError("invalid scan interval config: " + name)
+        if config["command_scan_active_ms"] > config["command_scan_idle_ms"]:
+            raise RuntimeError("active command scan interval must not exceed idle interval")
+        instruments = config["pre_subscribe_instruments"]
+        if not isinstance(instruments, list) or len(instruments) > 100:
+            raise RuntimeError("pre_subscribe_instruments must contain at most 100 instruments")
+        normalized_instruments = []
+        seen_instruments = set()
+        for item in instruments:
+            if not isinstance(item, dict) or set(item) != {"exchange", "instrument_id"}:
+                raise RuntimeError("invalid pre_subscribe_instruments entry")
+            exchange = item["exchange"].strip().upper() if isinstance(item["exchange"], str) else ""
+            instrument_id = item["instrument_id"].strip() if isinstance(item["instrument_id"], str) else ""
+            key = (exchange, instrument_id)
+            if not exchange or not instrument_id or key in seen_instruments:
+                raise RuntimeError("invalid or duplicate pre_subscribe_instruments entry")
+            seen_instruments.add(key)
+            normalized_instruments.append({"exchange": exchange, "instrument_id": instrument_id})
+        config["pre_subscribe_instruments"] = normalized_instruments
         for name in ("adapter_max_order_notional", "adapter_max_margin_per_order", "adapter_max_total_margin", "adapter_max_risk_ratio", "adapter_max_price_deviation_pct"):
             if isinstance(config[name], bool) or not isinstance(config[name], (int, float)) or not math.isfinite(float(config[name])) or config[name] <= 0:
                 raise RuntimeError("invalid numeric config: " + name)
@@ -1621,9 +1649,10 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
 
     def poll_commands(self):
         if not self._config:
-            return
+            return 0
         if not self._poll_lock.acquire(blocking=False):
-            return
+            return 0
+        activity = 0
         try:
             paths = []
             for folder in ("control", "commands"):
@@ -1640,11 +1669,14 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
                     if claimed is not None:
                         with self._pending_lock:
                             self._pending_paths.append(claimed)
+                        activity += 1
                     continue
                 self._process_path(path)
+                activity += 1
         finally:
             self._last_scan_at = time.time()
             self._poll_lock.release()
+        return activity
 
     def _process_path(self, path):
         if path.endswith(".json"):
@@ -1696,6 +1728,24 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
         for path in paths:
             if os.path.exists(path):
                 self._process_path(path)
+        return len(paths)
+
+    def _has_pending_tick_commands(self):
+        with self._pending_lock:
+            return bool(self._pending_paths)
+
+    def _pre_subscribe_quotes(self):
+        subscribed = 0
+        warnings = []
+        for item in self._config.get("pre_subscribe_instruments", []):
+            key = (item["exchange"], item["instrument_id"])
+            self._requested_instruments.add(key)
+            try:
+                self.sub_market_data(exchange=key[0], instrument_id=key[1])
+                subscribed += 1
+            except Exception as exc:
+                warnings.append("%s:%s: %s" % (key[0], key[1], self._redact(exc)))
+        return subscribed, warnings
 
     def heartbeat(self):
         if not self._config:
@@ -1724,14 +1774,19 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
 
     def _background_loop(self, stop_event):
         heartbeat_deadline = time.monotonic() + self._config["heartbeat_seconds"]
-        while not stop_event.wait(1.0):
+        active_wait = self._config["command_scan_active_ms"] / 1000.0
+        idle_wait = self._config["command_scan_idle_ms"] / 1000.0
+        wait_seconds = idle_wait
+        while not stop_event.wait(wait_seconds):
+            activity = 0
             try:
-                self.poll_commands()
+                activity = self.poll_commands()
             except Exception as exc:
                 try:
                     self.output("[WorkBuddy-PythonGO][POLL-ERROR] %s" % self._redact(exc))
                 except Exception:
                     pass
+            wait_seconds = active_wait if activity or self._has_pending_tick_commands() else idle_wait
             now = time.monotonic()
             if now >= heartbeat_deadline:
                 try:
@@ -1792,6 +1847,14 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             if self._config["pythongo_mode"] != "OBSERVE_ONLY" and self._profile_status != "VALID":
                 raise RuntimeError("non-observe mode requires a valid bound Profile")
             self._status = "READY"
+            subscribed, warnings = self._pre_subscribe_quotes()
+            try:
+                if subscribed:
+                    self.output("[WorkBuddy-PythonGO][QUOTE-PRE-SUBSCRIBE] subscribed=%d" % subscribed)
+                for warning in warnings:
+                    self.output("[WorkBuddy-PythonGO][QUOTE-PRE-SUBSCRIBE-WARN] %s" % warning)
+            except Exception:
+                pass
             self._start_background_loop()
             self.poll_commands()
             self.heartbeat()
@@ -1823,7 +1886,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             if key in self._requested_instruments:
                 self._emit_quotes([{"exchange": key[0], "instrument_id": key[1]}])
             if self._config and self._config["command_dispatch_mode"] == "TICK_DISPATCH":
-                if time.time() - self._last_scan_at >= 1:
+                if time.time() - self._last_scan_at >= self._config["command_scan_idle_ms"] / 1000.0:
                     self.poll_commands()
                 self._drain_tick_dispatch()
             if self._config and time.time() - self._last_heartbeat_at >= self._config["heartbeat_seconds"]:

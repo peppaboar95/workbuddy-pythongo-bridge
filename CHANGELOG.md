@@ -2,6 +2,16 @@
 
 本项目的重要变化记录在此。版本号遵循 Semantic Versioning。
 
+## 0.3.7 - 2026-09-12
+
+### Changed
+
+- 交易提交在命令可靠落队列后立即返回 `async_status`，明确区分 Bridge 接收、原生报单返回、柜台回报和终态；调用方使用 `get_trade_intent` 按建议的 150ms 间隔异步追踪；
+- Worker 与 Adapter 命令/回报扫描改为 100ms 活跃、200ms 空闲的自适应周期，对账和租约维护仍保持低频；
+- Adapter 启动时预订阅 `bridge.json` 账户白名单中的精确合约，并持续把 Tick 写入本地行情快照；
+- `request_sync` 新增 `purpose=TRADE` 热路径约束，交易同步不得夹带 K 线；K 线仍可通过 `purpose=GENERAL` 单独请求；
+- 单子单撤单和部分成交后撤单现在会把意图聚合为明确终态，避免异步轮询无法结束。
+
 ## 0.3.6 - 2026-09-11
 
 ### Fixed

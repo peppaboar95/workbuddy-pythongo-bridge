@@ -25,6 +25,10 @@ AUTO_FAILURE_STATES = {
     "ADAPTER_REJECTED", "BROKER_REJECTED", "FAILED", "SUBMIT_UNKNOWN",
     "SEQUENCE_ABORTED",
 }
+TERMINAL_INTENT_STATES = {
+    "FILLED", "OBSERVED", "CANCELLED", "PARTIALLY_FILLED_CANCELLED",
+    "FAILED", "SUBMIT_UNKNOWN",
+}
 AUTO_PAUSE_REASONS = {
     "AUTO_PROFILE_INVALID", "AUTO_ADAPTER_NOT_READY",
     "AUTO_ADAPTER_MODE_MISMATCH", "AUTO_ADAPTER_LOCALLY_HALTED",
@@ -451,7 +455,36 @@ class BridgeCore:
                 raise BridgeError("INTENT_NOT_FOUND", "trade intent was not found")
             children = connection.execute("SELECT * FROM child_orders WHERE intent_id=? ORDER BY child_no", (intent_id,)).fetchall()
             trades = connection.execute("SELECT * FROM trades WHERE intent_id=? ORDER BY traded_at", (intent_id,)).fetchall()
-        return {"intent": dict(row), "request": _payload(row), "children": [dict(item) for item in children], "trades": [_payload(item) for item in trades]}
+            commands = connection.execute(
+                "SELECT delivered_at FROM adapter_commands WHERE intent_id=? AND command_type='TRADE_INTENT'",
+                (intent_id,),
+            ).fetchall()
+            acknowledgements = connection.execute(
+                "SELECT status FROM adapter_command_acks WHERE intent_id=?",
+                (intent_id,),
+            ).fetchall()
+            broker_order = connection.execute(
+                "SELECT 1 FROM orders WHERE intent_id=? LIMIT 1", (intent_id,),
+            ).fetchone()
+        child_items = [dict(item) for item in children]
+        state = row["status"]
+        acknowledgement_states = {item["status"] for item in acknowledgements}
+        return {
+            "async_status": {
+                "accepted": True,
+                "state": state,
+                "queue_delivered": any(item["delivered_at"] for item in commands) or bool(acknowledgement_states),
+                "native_send_returned": "SEND_RETURNED" in acknowledgement_states,
+                "broker_acknowledged": broker_order is not None,
+                "terminal": state in TERMINAL_INTENT_STATES,
+                "poll_method": "get_trade_intent",
+                "poll_after_ms": None if state in TERMINAL_INTENT_STATES else 150,
+            },
+            "intent": dict(row),
+            "request": _payload(row),
+            "children": child_items,
+            "trades": [_payload(item) for item in trades],
+        }
 
     def list_trade_intents(self, status=None, after_seq=0, limit=100):
         if isinstance(after_seq, bool) or not isinstance(after_seq, int) or after_seq < 0:
@@ -1511,11 +1544,15 @@ class BridgeCore:
         self.dispatch_pending_commands(account.alias)
         return {"message_id": envelope["message_id"], "status": "DELIVERED", "command_type": message_type}
 
-    def request_sync(self, account_alias, scopes, instruments=None, kline=None):
+    def request_sync(self, account_alias, scopes, instruments=None, kline=None, purpose="GENERAL"):
         account = self.config.account(account_alias)
+        if not isinstance(purpose, str) or purpose not in {"GENERAL", "TRADE"}:
+            raise ValidationError("purpose must be GENERAL or TRADE")
         allowed = {"ACCOUNT", "POSITION", "ORDER", "TRADE", "QUOTE", "KLINE"}
         if not isinstance(scopes, list) or not scopes or len(scopes) > len(allowed) or not all(isinstance(item, str) for item in scopes) or len(set(scopes)) != len(scopes) or set(scopes) - allowed:
             raise ValidationError("scopes must be a unique non-empty subset of supported values")
+        if purpose == "TRADE" and "KLINE" in scopes:
+            raise ValidationError("KLINE is not allowed in the trade hot path; request it separately with purpose GENERAL")
         instruments = [] if instruments is None else instruments
         if not isinstance(instruments, list) or len(instruments) > 100:
             raise ValidationError("instruments must be an array with at most 100 entries")
@@ -1540,8 +1577,13 @@ class BridgeCore:
             kline = {"interval": interval, "count": count}
         if "KLINE" in scopes and kline is None:
             raise ValidationError("KLINE sync requires kline.interval")
-        payload = {"type": "REQUEST_SYNC", "account_alias": account.alias, "scopes": scopes, "instruments": normalized, "kline": kline or {}}
-        return self._queue_control(account, "REQUEST_SYNC", payload)
+        payload = {
+            "type": "REQUEST_SYNC", "account_alias": account.alias, "purpose": purpose,
+            "scopes": scopes, "instruments": normalized, "kline": kline or {},
+        }
+        result = self._queue_control(account, "REQUEST_SYNC", payload)
+        result["purpose"] = purpose
+        return result
 
     def queue_p0_test_order(self, account_alias, exchange, instrument_id, isolated_notional_cap=None):
         account = self.config.account(account_alias)
@@ -1922,5 +1964,14 @@ class BridgeCore:
                     "UPDATE adapter_commands SET status='DELIVERED',delivered_at=? WHERE message_id=? AND status='PENDING_DELIVERY'",
                     (iso_now(), row["message_id"]),
                 )
+                if row["command_type"] == "TRADE_INTENT" and row["child_order_id"]:
+                    connection.execute(
+                        "UPDATE child_orders SET status='QUEUED',updated_at=? WHERE child_order_id=? AND status='PENDING_DELIVERY'",
+                        (iso_now(), row["child_order_id"]),
+                    )
+                    connection.execute(
+                        "UPDATE trade_intents SET status='QUEUED',updated_at=? WHERE intent_id=? AND status='PERSISTED'",
+                        (iso_now(), row["intent_id"]),
+                    )
             delivered.append(row["message_id"])
         return delivered

@@ -1,4 +1,4 @@
-# WorkBuddy-PythonGO Bridge 0.3.6 操作手册
+# WorkBuddy-PythonGO Bridge 0.3.7 操作手册
 
 这是 WorkBuddy 与无限易 PythonGO v2 之间的本机期货桥接。本文按实际操作顺序说明首次安装、观察模式验收、P0 Profile、模式切换和 `LIMITED_AUTO` 许可。
 
@@ -153,7 +153,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 配置、Profile 和模式变化时无需再复制 JSON，但 Adapter 只在初始化时加载它们，仍应完整退出并重启无限易。覆盖 Python 文件后只停止并重新运行策略可能继续使用旧模块缓存，源码更新同样必须完整重启。
 
-升级到 v0.3.6 时优先重新运行 CMD 安装器；向导会自动处理无风险跟踪字段并部署新 Adapter。若结果显示 `material_change=true`，应保持 `POLICY_REVIEW` 保护，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次迁移重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
+升级到 v0.3.7 时优先重新运行 CMD 安装器；向导会部署带自适应扫描与行情预订阅的新 Adapter，并自动处理无风险跟踪字段。完整退出并重启无限易后，新 Adapter 才会加载并预订阅白名单合约。若结果显示 `material_change=true`，应保持 `POLICY_REVIEW` 保护，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次迁移重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
 
 ## 5. 第一次启动：只使用 OBSERVE_ONLY
 
@@ -361,6 +361,8 @@ python -m workbuddy_pythongo.worker --config $BridgeConfig --confirm-mode LIMITE
 
 `bridge.json` 的 `instrument_allowlist` 建议在自动模式前显式填写精确交易所和合约。当前实现中空数组表示不限制合约；这不适合有限自动部署。
 
+启动器会把该白名单同步为 Adapter 的行情预订阅列表。完整重启无限易并启动 Adapter 后，这些合约会在下单前持续接收 Tick；白名单为空时仍需首次按需订阅。
+
 先读取实际硬限制，不要照抄其他电脑的额度：
 
 ```text
@@ -384,6 +386,7 @@ LIMITED_AUTO
 ```json
 {
   "account_alias": "main_futures",
+  "purpose": "TRADE",
   "scopes": ["ACCOUNT", "POSITION", "ORDER", "TRADE", "QUOTE"],
   "instruments": [
     {"exchange": "YOUR_EXCHANGE", "instrument_id": "YOUR_CONTRACT"}
@@ -392,6 +395,8 @@ LIMITED_AUTO
 ```
 
 把 `YOUR_EXCHANGE` 和 `YOUR_CONTRACT` 替换为本次许可的精确合约。
+
+`purpose="TRADE"` 会拒绝 `KLINE`，避免历史数据查询阻塞交易热路径。策略需要 K 线时，应在形成交易决策前用 `purpose="GENERAL"` 单独同步并读取缓存。
 
 ### 8.4 检查 readiness
 
@@ -466,7 +471,7 @@ remaining_orders>0
 remaining_notional>0
 ```
 
-每个自动交易意图仍必须执行 `request_sync → preview_trade → submit_trade_intent`，并使用与许可完全一致的策略来源和 `FIXED_VOLUME`。通过 `get_trade_intent`、`get_orders` 和 `get_trades` 跟踪回调事实。
+每个自动交易意图仍必须执行 `request_sync(purpose="TRADE") → preview_trade → submit_trade_intent`，并使用与许可完全一致的策略来源和 `FIXED_VOLUME`。`submit_trade_intent` 在可靠落库和入队后立即返回，不能把 `async_status.accepted=true` 当成柜台已接单；按 `async_status.poll_after_ms` 调用 `get_trade_intent`，并通过 `get_orders` 和 `get_trades` 跟踪回调事实。
 
 ### 8.7 暂停、恢复和撤销
 
@@ -579,13 +584,15 @@ MCP 只访问本机回环 Worker，不持有 HMAC 密钥。WorkBuddy 可以查�
 
 ```text
 pythongo_health
-→ request_sync
+→ request_sync(purpose="TRADE")
 → 读取资金/持仓/行情
 → preview_trade
 → 对应模式的人工或自动许可
 → submit_trade_intent
 → get_trade_intent / get_orders / get_trades
 ```
+
+其中 `submit_trade_intent` 返回的是异步受理状态。`QUEUED` 只表示 Bridge 已可靠接收并投递；`native_send_returned`、`broker_acknowledged` 和 `terminal` 分别表示原生报单调用已有确定返回、已收到柜台委托事实和已进入终态。未终态时按返回的 `poll_after_ms` 查询，不要长时间占用一次 MCP 调用等待成交。
 
 ## 12. 支持范围和安全边界
 

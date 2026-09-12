@@ -274,6 +274,10 @@ class EventIngester:
                 "UPDATE adapter_commands SET status='PENDING_DELIVERY' WHERE child_order_id=? AND status='BLOCKED_SEQUENCE'",
                 (next_child["child_order_id"],),
             )
+            connection.execute(
+                "UPDATE child_orders SET status='PENDING_DELIVERY',updated_at=? WHERE child_order_id=? AND status='BLOCKED_SEQUENCE'",
+                (iso_now(), next_child["child_order_id"]),
+            )
         else:
             connection.execute(
                 "UPDATE child_orders SET status='SEQUENCE_ABORTED',updated_at=? WHERE intent_id=? AND child_no>? AND status='BLOCKED_SEQUENCE'",
@@ -294,6 +298,8 @@ class EventIngester:
             status = "SUBMIT_UNKNOWN"
         elif all(state in {"FILLED", "OBSERVED"} for state in states):
             status = "OBSERVED" if all(state == "OBSERVED" for state in states) else "FILLED"
+        elif all(state in {"FILLED", "CANCELLED", "PARTIALLY_FILLED_CANCELLED"} for state in states):
+            status = "PARTIALLY_FILLED_CANCELLED" if "PARTIALLY_FILLED_CANCELLED" in states or "FILLED" in states else "CANCELLED"
         elif any(state in {"REJECTED", "FAILED_BEFORE_SEND", "SEQUENCE_ABORTED"} for state in states):
             status = "FAILED"
         elif any(state in {"WORKING", "PARTIALLY_FILLED", "SEND_RETURNED"} for state in states):

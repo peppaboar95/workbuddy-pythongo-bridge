@@ -55,6 +55,12 @@ def _sync_adapter_mode(config, mode):
         path = _adapter_path(config, account)
         raw = _read_json(path)
         raw["pythongo_mode"] = mode
+        raw.setdefault("command_scan_active_ms", 100)
+        raw.setdefault("command_scan_idle_ms", 200)
+        raw["pre_subscribe_instruments"] = [
+            {"exchange": exchange, "instrument_id": instrument_id}
+            for exchange, instrument_id in account.instrument_allowlist
+        ]
         atomic_write_json(path, raw)
         changed.append(path)
     return changed

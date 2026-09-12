@@ -181,6 +181,8 @@ CREATE TABLE IF NOT EXISTS adapter_commands (
   delivered_at TEXT,
   payload_json TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_adapter_commands_intent
+ON adapter_commands(intent_id, command_type);
 CREATE TABLE IF NOT EXISTS adapter_command_acks (
   event_id TEXT PRIMARY KEY,
   message_id TEXT,
@@ -191,6 +193,8 @@ CREATE TABLE IF NOT EXISTS adapter_command_acks (
   occurred_at TEXT NOT NULL,
   payload_json TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_adapter_command_acks_intent
+ON adapter_command_acks(intent_id, status);
 CREATE TABLE IF NOT EXISTS orders (
   account_alias TEXT NOT NULL,
   trading_day TEXT NOT NULL,
@@ -210,6 +214,8 @@ CREATE TABLE IF NOT EXISTS orders (
   payload_json TEXT NOT NULL,
   PRIMARY KEY(account_alias, trading_day, pythongo_order_id)
 );
+CREATE INDEX IF NOT EXISTS idx_orders_intent
+ON orders(intent_id);
 CREATE TABLE IF NOT EXISTS order_events (
   event_id TEXT PRIMARY KEY,
   account_alias TEXT NOT NULL,

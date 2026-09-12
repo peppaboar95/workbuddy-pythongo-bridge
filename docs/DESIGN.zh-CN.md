@@ -1,6 +1,6 @@
 # WorkBuddy 与无限易（PythonGO）桥接程序设计
 
-> 状态：Design v0.3.6（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）
+> 状态：Design v0.3.7（对齐 WorkBuddy-QMT Bridge 0.3.0 的 `LIMITED_AUTO` 安全模型）
 > 日期：2026-08-27  
 > 适用范围：Windows、Tencent WorkBuddy、无限易客户端、PythonGO v2、期货行情监控及模拟/实盘交易  
 > 风险声明：本文描述交易基础设施，不构成投资建议。任何实盘能力必须经过只读、空跑、模拟、人工确认和小额灰度验证。
@@ -491,7 +491,7 @@ PythonGO 在客户端内运行，外部进程无法直接导入和调用其内�
 - JSON 使用 UTF-8、固定 Schema 和规范化序列化；
 - HMAC 覆盖除 `signature` 外的完整信封，包括版本、类型、正文、发送方、签发和过期时间；
 - Adapter 验证精确字段集合、签名、有效期、时钟偏差、账户分区、模式和重复键；
-- Worker 在 SQLite 中先写 `PENDING_DELIVERY`，事务提交后才发布命令文件；后台循环补投未交付命令；
+- Worker 在 SQLite 中先写 `PENDING_DELIVERY`，事务提交后才发布命令文件；文件可靠发布后把首个子单和意图更新为 `QUEUED` 并立即向 MCP 返回异步状态，后台循环补投未交付命令；
 - Adapter 先写执行日记和 ACK，再将输入移入 `archive` 或 `dead_letter`；
 - 消费端按 `message_id` 幂等入库，重复事件不得重复改变订单、成交或额度。
 
@@ -536,9 +536,11 @@ PythonGO v2 暴露了基于 `BackgroundScheduler` 的 `Scheduler`，但现场 P0
 - 日志和事件刷盘；
 - 队列积压检查。
 
-后台循环不执行长耗时查询、外部网络请求、批量历史下载或数据库迁移。`on_stop` 必须置停止事件并有界等待线程退出；心跳还由 `on_tick` 提供降级补偿。
+后台循环不执行长耗时查询、外部网络请求、批量历史下载或数据库迁移。命令和 ACK 在有活动时每 100ms 扫描、空闲时每 200ms 扫描；租约、对账等维护任务仍按 1 秒级周期运行，避免高频 SQLite 写锁。`on_stop` 必须置停止事件并有界等待线程退出；心跳还由 `on_tick` 提供降级补偿。
 
 后台循环和 `on_tick` 都可能触发降级扫描，因此 Adapter 使用非阻塞扫描互斥锁。发现命令后必须先在同一目录原子改名为唯一 `.processing-*` 名称，再进行验签和处理；只有原子领取成功的扫描器可以执行。源文件已被其他扫描器领取导致的 `FileNotFoundError` 属于正常竞争，不写拒绝 ACK、不进死信。该规则同时防止残留线程或误启动双实例重复消费。
+
+Adapter 在 `on_start` 阶段预订阅账户 `instrument_allowlist` 同步到 ready 配置中的全部精确合约，并把后续 Tick 持续发布为本地行情快照。白名单为空时无法预知目标合约，仍由首次 `request_sync(QUOTE)` 建立按需订阅。K 线经 `MarketCenter` 单独读取，不得放入 `purpose=TRADE` 的资金、持仓和行情同步热路径。
 
 ### 10.2 报撤单线程亲和性必须现场验证
 
@@ -718,7 +720,7 @@ get_limited_auto_status(account_alias)
 ### 13.2 有副作用工具
 
 ```text
-request_sync(account_alias, scopes, instruments?)
+request_sync(account_alias, scopes, instruments?, kline?, purpose="GENERAL")
 preview_trade(trade_request)
 authorize_manual_trade(preview_id, live_minutes, approval_ttl_seconds, reason, confirm)
 authorize_manual_session(account_alias, minutes, reason, confirm)
@@ -950,7 +952,7 @@ sequenceDiagram
     participant I as 无限易/柜台
 
     U->>W: 提出结构化交易需求
-    W->>M: request_sync(ACCOUNT/POSITION/QUOTE)
+    W->>M: request_sync(ACCOUNT/POSITION/QUOTE, purpose=TRADE)
     M->>B: 回环 RPC
     B->>A: 签名控制命令
     A-->>B: 快照事件 + ACK
@@ -978,7 +980,9 @@ sequenceDiagram
     I-->>A: order_id 或 -1
     I-->>A: on_order / on_trade / on_cancel / on_error
     A->>B: 结构化签名事件
-    B-->>W: 可查询执行状态
+    B-->>W: QUEUED + async_status（立即返回）
+    W->>M: get_trade_intent(intent_id)
+    M-->>W: SEND_RETURNED / ACTIVE / 终态
 ```
 
 ### 16.1 Preview
@@ -1509,6 +1513,8 @@ MCP `cancel_order` 接受桥接订单 ID，Worker 映射到明确的 PythonGO `o
 | `expected_profile_id` | 来自 P0 Profile |
 | `expected_infinitrader_build` / `expected_pythongo_build` / `expected_broker_build` | 来自 P0 证据并与 Profile 逐字一致 |
 | `max_batch` / `max_message_bytes` | 单轮最大命令数和单消息上限 |
+| `command_scan_active_ms` / `command_scan_idle_ms` | 命令扫描周期，默认分别为 100ms / 200ms |
+| `pre_subscribe_instruments` | 从账户 `instrument_allowlist` 同步的精确行情预订阅列表，最多 100 项 |
 | `adapter_max_*` / `max_*_age_seconds` | 从 Worker 风控同步的 Adapter 本地硬上限 |
 | `margin_reference_schema_version` | 本地保证金数据格式版本；九期网每手保证金格式固定为 `2` |
 | `margin_reference_refresh_max_age_hours` | 签名本机保证金副本的刷新年龄硬阈值；默认 36 小时 |

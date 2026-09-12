@@ -87,23 +87,39 @@ def refresh_simulation_lease(core, lease_seconds=5):
 
 
 class RuntimeLoop(threading.Thread):
-    def __init__(self, core, interval=1.0):
+    def __init__(self, core, active_interval=0.1, idle_interval=0.2, maintenance_interval=1.0):
         super().__init__(name="pythongo-queue-loop", daemon=True)
         self.core = core
-        self.interval = float(interval)
+        self.active_interval = float(active_interval)
+        self.idle_interval = float(idle_interval)
+        self.maintenance_interval = float(maintenance_interval)
         self.stop_event = threading.Event()
         self.failed_closed = False
         self.last_lease_at = 0.0
+        self.last_maintenance_at = 0.0
+
+    @staticmethod
+    def _ingest_activity(result):
+        return any(
+            int(summary.get("processed", 0)) or int(summary.get("dead_lettered", 0))
+            for account in result.values()
+            for summary in account.values()
+        )
 
     def run(self):
         while not self.stop_event.is_set():
             try:
-                if time.monotonic() - self.last_lease_at >= 1.0:
+                now = time.monotonic()
+                if now - self.last_lease_at >= 1.0:
                     refresh_simulation_lease(self.core)
-                    self.last_lease_at = time.monotonic()
-                self.core.ingester.scan_once()
-                self.core.reconciler.scan_once()
-                self.core.dispatch_pending_commands()
+                    self.last_lease_at = now
+                ingested = self.core.ingester.scan_once()
+                delivered = self.core.dispatch_pending_commands()
+                reconciled = []
+                if now - self.last_maintenance_at >= self.maintenance_interval:
+                    reconciled = self.core.reconciler.scan_once()
+                    self.last_maintenance_at = now
+                activity = self._ingest_activity(ingested) or bool(delivered) or bool(reconciled)
             except Exception as exc:
                 print("queue loop error: %s" % exc, file=sys.stderr, flush=True)
                 if not self.failed_closed:
@@ -118,7 +134,8 @@ class RuntimeLoop(threading.Thread):
                                     self.core._write_local_halt(account, True, reason, "worker-fail-closed")
                                 except Exception:
                                     pass
-            self.stop_event.wait(self.interval)
+                activity = False
+            self.stop_event.wait(self.active_interval if activity else self.idle_interval)
 
 
 def make_handler(core, database, token, max_bytes):
