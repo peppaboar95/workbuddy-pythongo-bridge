@@ -1,4 +1,4 @@
-# WorkBuddy-PythonGO Bridge 0.3.7 操作手册
+# WorkBuddy-PythonGO Bridge 0.3.8 操作手册
 
 这是 WorkBuddy 与无限易 PythonGO v2 之间的本机期货桥接。本文按实际操作顺序说明首次安装、观察模式验收、P0 Profile、模式切换和 `LIMITED_AUTO` 许可。
 
@@ -153,7 +153,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 配置、Profile 和模式变化时无需再复制 JSON，但 Adapter 只在初始化时加载它们，仍应完整退出并重启无限易。覆盖 Python 文件后只停止并重新运行策略可能继续使用旧模块缓存，源码更新同样必须完整重启。
 
-升级到 v0.3.7 时优先重新运行 CMD 安装器；向导会部署带自适应扫描与行情预订阅的新 Adapter，并自动处理无风险跟踪字段。完整退出并重启无限易后，新 Adapter 才会加载并预订阅白名单合约。若结果显示 `material_change=true`，应保持 `POLICY_REVIEW` 保护，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次迁移重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
+升级到 v0.3.8 时优先重新运行 CMD 安装器；向导会部署带自适应扫描与行情预订阅的新 Adapter，并重新生成 UTF-8 桌面快捷方式。完整退出并重启无限易后，新 Adapter 才会加载并预订阅白名单合约。若结果显示 `material_change=true`，应保持 `POLICY_REVIEW` 保护，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次迁移重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
 
 ## 5. 第一次启动：只使用 OBSERVE_ONLY
 

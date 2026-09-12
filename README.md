@@ -13,14 +13,14 @@ WorkBuddy/MCP 与无限易 PythonGO v2 之间的本机、失败关闭型期货�
 
 ## 当前版本
 
-- 版本：0.3.7
+- 版本：0.3.8
 - Python：Worker 需要 3.10 或更高版本
 - 客户端：无限易 PythonGO v2
 - MCP 工具：31 个
 - 网络边界：Worker 仅绑定 `127.0.0.1`
 - 默认状态：`OBSERVE_ONLY`，交易关闭
 
-0.3.7 优化 MCP 交易热路径：交易意图可靠入队后立即返回异步状态；Worker 与 Adapter 使用 100–200ms 自适应扫描；Adapter 启动时预订阅账户白名单合约；交易同步明确禁止夹带 K 线请求。0.3.6 的开箱使用与 P0/P1 体验修复全部保留。
+0.3.8 包含 0.3.7 的 MCP 交易热路径优化：交易意图可靠入队后立即返回异步状态；Worker 与 Adapter 使用 100–200ms 自适应扫描；Adapter 启动时预订阅账户白名单合约；交易同步明确禁止夹带 K 线请求。本版本同时修复英文区域设置 Windows 无法生成中文桌面快捷方式的问题。
 
 ## 安全模型
 
@@ -61,8 +61,8 @@ Worker 负责状态、预览、风控、许可、审计和队列；内嵌 Adapte
 
 普通用户应从 GitHub Releases 下载同一版本的 ZIP 与哈希文件：
 
-- `workbuddy-pythongo-bridge-0.3.7.zip`
-- `workbuddy-pythongo-bridge-0.3.7.zip.sha256`
+- `workbuddy-pythongo-bridge-0.3.8.zip`
+- `workbuddy-pythongo-bridge-0.3.8.zip.sha256`
 - `SHA256SUMS.txt`
 
 校验后完整解压 ZIP，双击 `首次安装与配置.cmd`。安装器会检查 Python 3.10+、把包内 wheel 安装到当前用户的默认 Python 环境，并启动全中文向导。运行数据默认保存在 `%LOCALAPPDATA%\WorkBuddyPythonGO\runtime`，换一个解压目录升级也会复用原环境；向导会尝试发现 WorkBuddy MCP 配置和无限易策略目录，并在用户选定后安全部署。它不会启动无限易、Worker 或 WorkBuddy，也不会签名 Profile 或开放交易。投资者账号会明文显示，便于输入时核对；它不是登录密码。
@@ -104,7 +104,7 @@ python -m workbuddy_pythongo.desktop setup --root .\runtime
 - [Python 接口参考（单文件 HTML）](https://peppaboar95.github.io/workbuddy-pythongo-bridge/python-api-reference.html) — 31 个 Bridge 方法的参数、响应、错误码、配额与模块 API
 - [中文操作手册](docs/README-RELEASE.zh-CN.md)
 - [设计与安全边界](docs/DESIGN.zh-CN.md)
-- [0.3.7 发布说明](docs/RELEASE-v0.3.7.md)
+- [0.3.8 发布说明](docs/RELEASE-v0.3.8.md)
 - [P0 核对清单](examples/P0-CHECKLIST.zh-CN.md)
 
 ## 许可

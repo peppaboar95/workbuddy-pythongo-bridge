@@ -66,13 +66,14 @@ class DesktopSetupTests(unittest.TestCase):
                     pointer_path=os.path.join(root, "runtime.path"),
                     strategy_candidates=[],
                 )
-            python_executable = os.path.abspath(os.path.join(root, "Python Path", "python.exe"))
+            python_executable = os.path.abspath(os.path.join(root, "中文 Python Path", "python.exe"))
 
             create_shortcuts(result["config"], shortcuts, python_executable=python_executable)
 
-            launcher = pathlib.Path(shortcuts, "启动PythonGO桥接.cmd").read_text(
-                encoding="mbcs" if os.name == "nt" else None,
-            )
+            launcher_path = pathlib.Path(shortcuts, "启动PythonGO桥接.cmd")
+            launcher_bytes = launcher_path.read_bytes()
+            self.assertTrue(launcher_bytes.startswith(b"@echo off\r\nchcp 65001 >nul\r\n"))
+            launcher = launcher_bytes.decode("utf-8")
             self.assertIn('"%s" -m workbuddy_pythongo.desktop' % python_executable, launcher)
             self.assertIn('"%s" -m workbuddy_pythongo.manager' % python_executable, launcher)
 

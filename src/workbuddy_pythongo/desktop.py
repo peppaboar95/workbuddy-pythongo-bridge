@@ -3,7 +3,6 @@ import ctypes
 import datetime as dt
 import glob
 import json
-import locale
 import os
 import shutil
 import socket
@@ -341,7 +340,7 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
         _cmd_value(python_executable),
         _cmd_value(config_path),
     )
-    prefix = "@echo off\r\nsetlocal\r\n"
+    prefix = "@echo off\r\nchcp 65001 >nul\r\nsetlocal\r\n"
     scripts = {
         "启动PythonGO桥接.cmd": (
             prefix
@@ -390,17 +389,9 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
             + "exit /b %EXIT_CODE%\r\n"
         ),
     }
-    encoding = "mbcs" if os.name == "nt" else locale.getpreferredencoding(False)
     results = []
     for name, content in scripts.items():
-        try:
-            encoded = content.encode(encoding)
-        except UnicodeEncodeError as exc:
-            raise BridgeError(
-                "SHORTCUT_PATH_ENCODING_ERROR",
-                "Python或配置路径无法写入Windows批处理文件，请改用可由系统代码页表示的路径",
-                {"python": python_executable, "config": config_path},
-            ) from exc
+        encoded = content.encode("utf-8")
         results.append(_write_changed(os.path.join(target_dir, name), encoded))
     retired = _retire_obsolete_shortcut(os.path.join(target_dir, "更新PythonGO保证金数据.cmd"))
     return {"directory": target_dir, "scripts": results, "retired": retired}
