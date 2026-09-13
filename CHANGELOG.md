@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.3.9 - 2026-09-13
+
 ### Changed
 
 - Adapter 会恢复崩溃遗留的 `.json.processing-*` 命令，并继续依赖执行日记防止未知报单被自动重发；
