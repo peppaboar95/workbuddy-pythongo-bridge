@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import math
 import os
+import time
 
 from .errors import BridgeError, ValidationError
 from .futures import age_seconds, build_preview, validate_trade_request
@@ -46,6 +47,11 @@ P0_VALIDATION_LEG_MAPPINGS = {
     "CLOSE_TODAY_LONG": ("SELL", "3"),
     "OPEN_SHORT": ("SELL", "0"),
     "CLOSE_TODAY_SHORT": ("BUY", "3"),
+}
+TRADE_REFRESH_REASONS = {
+    "ACCOUNT_SNAPSHOT_MISSING", "ACCOUNT_SNAPSHOT_STALE",
+    "POSITION_SNAPSHOT_MISSING", "POSITION_STALE",
+    "QUOTE_MISSING", "QUOTE_STALE",
 }
 
 
@@ -224,15 +230,28 @@ class BridgeCore:
                     heartbeat and heartbeat["status"] == "READY" and heartbeat_age <= 15
                 )
                 observation_ready = bool(connected and mode_match and policy_match)
+                paused_permit = connection.execute(
+                    "SELECT pause_reason FROM auto_permits WHERE account_alias=? AND status='PAUSED' ORDER BY created_at DESC LIMIT 1",
+                    (account.alias,),
+                ).fetchone()
+                local_pause = bool((payload or {}).get("limited_auto_local_pause")) or bool(paused_permit)
                 trade_ready = bool(
                     observation_ready and profile_status == "VALID"
                     and not halted and not bool((payload or {}).get("local_halt"))
+                    and not local_pause
                 )
                 ready = bool(
                     observation_ready and not bool((payload or {}).get("local_halt"))
                 )
                 if mode != "OBSERVE_ONLY" and profile_status != "VALID":
                     ready = False
+                local_halt = bool((payload or {}).get("local_halt"))
+                if halted or local_halt:
+                    protection_level = "RISK_REDUCING_ONLY"
+                elif local_pause:
+                    protection_level = "PAUSE_NEW_OPEN"
+                else:
+                    protection_level = "READY"
                 accounts.append({
                     "account_alias": account.alias,
                     "adapter_instance": account.adapter_instance,
@@ -244,7 +263,13 @@ class BridgeCore:
                     "margin_policy_generation": (payload or {}).get("margin_policy_generation"),
                     "expected_margin_policy_generation": expected_policy_generation,
                     "profile_status": profile_status,
-                    "local_halt": bool((payload or {}).get("local_halt")),
+                    "local_halt": local_halt,
+                    "limited_auto_local_pause": local_pause,
+                    "limited_auto_pause_reason": paused_permit["pause_reason"] if paused_permit else None,
+                    "protection_level": protection_level,
+                    "risk_reducing_allowed": bool(
+                        observation_ready and mode != "OBSERVE_ONLY" and profile_status == "VALID"
+                    ),
                     "connected": connected,
                     "observation_ready": observation_ready,
                     "trade_ready": trade_ready,
@@ -259,6 +284,23 @@ class BridgeCore:
                 mode != "OBSERVE_ONLY" and accounts
                 and all(item["trade_ready"] for item in accounts)
             )
+            protection_levels = {item["protection_level"] for item in accounts}
+            if "RISK_REDUCING_ONLY" in protection_levels:
+                protection_level = "RISK_REDUCING_ONLY"
+            elif "PAUSE_NEW_OPEN" in protection_levels:
+                protection_level = "PAUSE_NEW_OPEN"
+            else:
+                protection_level = "READY"
+            effective_protection_kind = protection_kind
+            effective_protection_reason = halt_reason if halted else protection_reason
+            if effective_protection_kind == "NONE" and protection_level == "PAUSE_NEW_OPEN":
+                effective_protection_kind = "PAUSE_NEW_OPEN"
+                effective_protection_reason = ",".join(sorted(set(
+                    item["limited_auto_pause_reason"] for item in accounts
+                    if item.get("limited_auto_pause_reason")
+                )))
+            elif effective_protection_kind == "NONE" and protection_level == "RISK_REDUCING_ONLY":
+                effective_protection_kind = "LOCAL_HALT"
             return {
                 "worker": "READY",
                 "mode": mode,
@@ -268,15 +310,20 @@ class BridgeCore:
                 "unresolved_submit_unknown": unresolved,
                 "observation_ready": observation_ready,
                 "trade_ready": trade_ready,
+                "protection_level": protection_level,
                 "trade_protection": {
                     "active": bool(
                         halted or protection_kind != "NONE"
                         or any(item["local_halt"] for item in accounts)
+                        or protection_level != "READY"
                     ),
-                    "kind": protection_kind,
-                    "reason": halt_reason if halted else protection_reason,
+                    "kind": effective_protection_kind,
+                    "reason": effective_protection_reason,
                     "queries_available": observation_ready,
-                    "blocked_operation": "NEW_TRADES",
+                    "blocked_operation": "RISK_INCREASING_TRADES",
+                    "risk_reducing_allowed": bool(
+                        accounts and all(item["risk_reducing_allowed"] for item in accounts)
+                    ),
                 },
                 "ready": bool(accounts) and all(item["ready"] for item in accounts) and not halted,
             }
@@ -505,7 +552,24 @@ class BridgeCore:
 
     def get_risk_limits(self, account_alias):
         account = self.config.account(account_alias)
-        return dict(account.risk_limits.__dict__)
+        result = dict(account.risk_limits.__dict__)
+        with self.database.connect() as connection:
+            snapshot = self._latest_account(connection, account.alias)
+        funds = (snapshot or {}).get("payload") or {}
+        equity = funds.get("dynamic_rights") or funds.get("balance")
+        if isinstance(equity, (int, float)) and not isinstance(equity, bool) and math.isfinite(float(equity)) and equity > 0:
+            equity = float(equity)
+            result["account_equity"] = equity
+            result["effective_amount_limits"] = {
+                "max_order_notional": min(result["max_order_notional"], equity * result["max_order_notional_equity_pct"]),
+                "max_margin_per_order": min(result["max_margin_per_order"], equity * result["max_margin_per_order_equity_pct"]),
+                "max_total_margin": min(result["max_total_margin"], equity * result["max_total_margin_equity_pct"]),
+                "max_daily_loss": min(result["max_daily_loss"], equity * result["max_daily_loss_equity_pct"]),
+            }
+        else:
+            result["account_equity"] = None
+            result["effective_amount_limits"] = None
+        return result
 
     def get_reconciliation_status(self, account_alias):
         self.config.account(account_alias)
@@ -564,6 +628,7 @@ class BridgeCore:
 
     def _apply_system_gates(self, connection, request, result, account):
         mode = self._mode(connection)
+        risk_reducing = request["action"].startswith("CLOSE_")
         heartbeat = connection.execute("SELECT * FROM heartbeats WHERE adapter_instance=?", (account.adapter_instance,)).fetchone()
         heartbeat_payload = _payload(heartbeat) or {}
         try:
@@ -586,6 +651,7 @@ class BridgeCore:
             "profile_status": heartbeat["profile_status"] if heartbeat else "UNKNOWN",
             "limited_auto_protocol": heartbeat_payload.get("limited_auto_protocol") if heartbeat else None,
             "limited_auto_local_pause": bool(heartbeat_payload.get("limited_auto_local_pause")) if heartbeat else False,
+            "local_halt": bool(heartbeat_payload.get("local_halt")) if heartbeat else False,
             "margin_policy_generation": heartbeat_payload.get("margin_policy_generation") if heartbeat else None,
             "margin_policy_hash": heartbeat_payload.get("margin_policy_hash") if heartbeat else None,
             "expected_margin_policy_generation": expected_policy_generation,
@@ -594,7 +660,7 @@ class BridgeCore:
         reasons = list(result["risk"]["reasons"])
         if request["execution_mode"] != mode:
             reasons.append("MODE_MISMATCH")
-        if adapter_gate["halted"]:
+        if adapter_gate["halted"] and not risk_reducing:
             reasons.append("TRADING_HALTED")
         if adapter_gate["reconciliation_required"]:
             reasons.append("RECONCILIATION_REQUIRED")
@@ -602,6 +668,8 @@ class BridgeCore:
             reasons.append("ADAPTER_STALE")
         elif heartbeat["mode"] != mode:
             reasons.append("MODE_MISMATCH")
+        if adapter_gate["local_halt"] and not risk_reducing:
+            reasons.append("ADAPTER_LOCALLY_HALTED")
         if mode != "OBSERVE_ONLY" and adapter_gate["profile_status"] != "VALID":
             reasons.append("PROFILE_INVALID")
         if (
@@ -609,17 +677,35 @@ class BridgeCore:
             adapter_gate["margin_policy_hash"] != expected_policy_hash
         ):
             reasons.append("MARGIN_POLICY_MISMATCH")
-        if mode == "LIMITED_AUTO":
-            permit = self._active_auto_permit_row(connection, account.alias)
+        if mode == "LIMITED_AUTO" and not (adapter_gate["halted"] and risk_reducing):
+            permit = self._active_auto_permit_row(
+                connection, account.alias, allow_paused=risk_reducing,
+            )
             if not permit:
-                reasons.append("AUTO_PERMIT_REQUIRED")
-                result["limited_auto"] = {"active": False, "permit_id": None}
+                paused = self._active_auto_permit_row(connection, account.alias, allow_paused=True)
+                reason = "PAUSE_NEW_OPEN" if paused and paused["status"] == "PAUSED" else "AUTO_PERMIT_REQUIRED"
+                reasons.append(reason)
+                result["limited_auto"] = {
+                    "active": False, "permit_id": paused["permit_id"] if paused else None,
+                    "status": paused["status"] if paused else "NONE",
+                }
             else:
                 auto_reasons, _, summary = self._limited_auto_policy_reasons(
-                    connection, permit, request, result,
+                    connection, permit, request, result, include_health=not risk_reducing,
                 )
                 reasons.extend(auto_reasons)
-                result["limited_auto"] = dict(summary or {}, active=not auto_reasons)
+                result["limited_auto"] = dict(
+                    summary or {}, active=not auto_reasons,
+                    status=permit["status"],
+                )
+        protection_level = "READY"
+        if adapter_gate["halted"] or adapter_gate["local_halt"]:
+            protection_level = "RISK_REDUCING_ONLY"
+        elif adapter_gate["limited_auto_local_pause"] or (
+            mode == "LIMITED_AUTO" and result.get("limited_auto", {}).get("status") == "PAUSED"
+        ):
+            protection_level = "PAUSE_NEW_OPEN"
+        result["protection_level"] = protection_level
         result["risk"]["reasons"] = sorted(set(reasons))
         result["risk"]["allowed"] = not result["risk"]["reasons"]
         result["adapter_gate"] = adapter_gate
@@ -634,11 +720,13 @@ class BridgeCore:
             "profile_status": adapter_gate["profile_status"],
             "limited_auto_protocol": adapter_gate["limited_auto_protocol"],
             "limited_auto_local_pause": adapter_gate["limited_auto_local_pause"],
+            "local_halt": adapter_gate["local_halt"],
             "margin_policy_generation": adapter_gate["margin_policy_generation"],
             "margin_policy_hash": adapter_gate["margin_policy_hash"],
             "expected_margin_policy_generation": adapter_gate["expected_margin_policy_generation"],
             "expected_margin_policy_hash": adapter_gate["expected_margin_policy_hash"],
         }
+        result["decision_material"]["protection_level"] = protection_level
         result["decision_material"]["risk_reasons"] = result["risk"]["reasons"]
         result["decision_fingerprint"] = hash_json(result["decision_material"])
         return result
@@ -662,11 +750,12 @@ class BridgeCore:
         self._set_state(connection, key, generation)
         return generation
 
-    def _active_auto_permit_row(self, connection, account_alias):
+    def _active_auto_permit_row(self, connection, account_alias, allow_paused=False):
+        statuses = ("ACTIVE", "PAUSED") if allow_paused else ("ACTIVE",)
         row = connection.execute(
-            """SELECT * FROM auto_permits WHERE account_alias=? AND status='ACTIVE'
-               ORDER BY created_at DESC LIMIT 1""",
-            (account_alias,),
+            """SELECT * FROM auto_permits WHERE account_alias=? AND status IN (%s)
+               ORDER BY created_at DESC LIMIT 1""" % ",".join("?" for _ in statuses),
+            [account_alias] + list(statuses),
         ).fetchone()
         if not row:
             return None
@@ -817,12 +906,13 @@ class BridgeCore:
                 reasons.append("AUTO_PERMIT_EXPIRED")
         except (TypeError, ValueError):
             reasons.append("AUTO_POLICY_INVALID")
-        if not self._auto_schedule_active(policy, now):
-            reasons.append("AUTO_OUTSIDE_TRADING_WINDOW")
         instrument = "%s:%s" % (
             request["instrument"]["exchange"], request["instrument"]["instrument_id"]
         )
         action = request["action"]
+        risk_reducing = action.startswith("CLOSE_")
+        if not risk_reducing and not self._auto_schedule_active(policy, now):
+            reasons.append("AUTO_OUTSIDE_TRADING_WINDOW")
         source = request.get("source") or {}
         if instrument not in policy.get("allowed_instruments", []):
             reasons.append("AUTO_INSTRUMENT_NOT_ALLOWED")
@@ -851,20 +941,21 @@ class BridgeCore:
         ):
             reasons.append("AUTO_POLICY_EXCEEDS_CURRENT_CONFIG")
         usage = self._auto_usage_snapshot(connection, permit_row["permit_id"])
-        if usage["order_count"] + child_count > int(policy.get("max_orders", 0)):
-            reasons.append("AUTO_ORDER_COUNT_EXCEEDED")
-        if usage["notional"] + notional > float(policy.get("max_session_notional", 0)):
-            reasons.append("AUTO_SESSION_NOTIONAL_EXCEEDED")
-        if usage.get("last_reserved_at"):
-            elapsed = (now - parse_time(usage["last_reserved_at"])).total_seconds()
-            if elapsed < int(policy.get("min_order_interval_seconds", 0)):
-                reasons.append("AUTO_ORDER_RATE_EXCEEDED")
+        if not risk_reducing:
+            if usage["order_count"] + child_count > int(policy.get("max_orders", 0)):
+                reasons.append("AUTO_ORDER_COUNT_EXCEEDED")
+            if usage["notional"] + notional > float(policy.get("max_session_notional", 0)):
+                reasons.append("AUTO_SESSION_NOTIONAL_EXCEEDED")
+            if usage.get("last_reserved_at"):
+                elapsed = (now - parse_time(usage["last_reserved_at"])).total_seconds()
+                if elapsed < int(policy.get("min_order_interval_seconds", 0)):
+                    reasons.append("AUTO_ORDER_RATE_EXCEEDED")
         active_count = connection.execute(
             "SELECT COUNT(*) AS n FROM orders WHERE account_alias=? AND status IN (%s)" %
             ",".join("?" for _ in ACTIVE_ORDER_STATES),
             [account.alias] + sorted(ACTIVE_ORDER_STATES),
         ).fetchone()["n"]
-        if int(active_count) + child_count > int(policy.get("max_concurrent_orders", 0)):
+        if not risk_reducing and int(active_count) + child_count > int(policy.get("max_concurrent_orders", 0)):
             reasons.append("AUTO_CONCURRENT_ORDER_LIMIT")
         multiplier = float(current.get("decision_material", {}).get("quote_guard", {}).get("volume_multiple") or 0)
         current_volume = int(current.get("decision_material", {}).get("target_position", {}).get("position") or 0)
@@ -872,20 +963,21 @@ class BridgeCore:
             projected_volume = current_volume + volume
         else:
             projected_volume = max(0, current_volume - volume)
-        if projected_volume * float(current["resolved_limit_price"]) * multiplier > float(policy.get("max_instrument_position_notional", 0)):
+        if not risk_reducing and projected_volume * float(current["resolved_limit_price"]) * multiplier > float(policy.get("max_instrument_position_notional", 0)):
             reasons.append("AUTO_INSTRUMENT_POSITION_LIMIT")
         account_snapshot = self._latest_account(connection, account.alias)
         funds = (account_snapshot or {}).get("payload") or {}
         current_equity = float(funds.get("dynamic_rights") or funds.get("balance") or 0)
         baseline = float(policy.get("baseline_equity", 0) or 0)
-        if baseline <= 0 or current_equity <= 0:
-            reasons.append("AUTO_ACCOUNT_EQUITY_UNAVAILABLE")
-        elif baseline - current_equity > float(policy.get("max_account_drawdown", 0)):
-            reasons.append("AUTO_ACCOUNT_DRAWDOWN_EXCEEDED")
+        if not risk_reducing:
+            if baseline <= 0 or current_equity <= 0:
+                reasons.append("AUTO_ACCOUNT_EQUITY_UNAVAILABLE")
+            elif baseline - current_equity > float(policy.get("max_account_drawdown", 0)):
+                reasons.append("AUTO_ACCOUNT_DRAWDOWN_EXCEEDED")
         consecutive = self._auto_consecutive_failures(connection, permit_row["permit_id"])
-        if consecutive >= int(policy.get("max_consecutive_failures", 1)):
+        if not risk_reducing and consecutive >= int(policy.get("max_consecutive_failures", 1)):
             reasons.append("AUTO_CONSECUTIVE_FAILURE_LIMIT")
-        if include_health:
+        if include_health and not risk_reducing:
             reasons.extend(self._limited_auto_health_reasons(connection, account))
         summary = {
             "permit_id": permit_row["permit_id"],
@@ -933,11 +1025,11 @@ class BridgeCore:
             "health_reasons": self._limited_auto_health_reasons(connection, account) if include_health else [],
         }
 
-    def _write_auto_permit_authorization(self, account, permit_row):
+    def _write_auto_permit_authorization(self, account, permit_row, authorization_type="LIMITED_AUTO_PERMIT", actor="mcp"):
         policy = json.loads(permit_row["policy_json"])
         self._write_local_authorization(
-            account, ["LIMITED_AUTO"], parse_time(permit_row["expires_at"]), "mcp",
-            permit_row["permit_id"], "LIMITED_AUTO_PERMIT",
+            account, ["LIMITED_AUTO"], parse_time(permit_row["expires_at"]), actor,
+            permit_row["permit_id"], authorization_type,
             {
                 "permit_id": permit_row["permit_id"], "policy_hash": permit_row["policy_hash"],
                 "generation": permit_row["generation"], "policy": policy,
@@ -1062,6 +1154,15 @@ class BridgeCore:
             baseline_equity = float(funds.get("dynamic_rights") or funds.get("balance") or 0)
             if baseline_equity <= 0:
                 raise BridgeError("AUTO_ACCOUNT_EQUITY_UNAVAILABLE", "positive dynamic_rights or balance is required")
+            effective_order_notional = min(
+                limits.max_order_notional,
+                baseline_equity * limits.max_order_notional_equity_pct,
+            )
+            if numbers["max_order_notional"] > effective_order_notional:
+                raise ValidationError(
+                    "max_order_notional exceeds the current equity-adjusted hard limit",
+                    {"effective_max_order_notional": effective_order_notional},
+                )
             generation = self._next_auto_generation(connection, account.alias)
             permit_id = new_id("auto_permit")
             policy = {
@@ -1119,7 +1220,9 @@ class BridgeCore:
             row = self._active_auto_permit_row(connection, account.alias)
             if not row:
                 return False
-            self._next_auto_generation(connection, account.alias)
+            self._write_auto_permit_authorization(
+                account, row, authorization_type="PAUSE_NEW_OPEN", actor=actor,
+            )
             connection.execute(
                 "UPDATE auto_permits SET status='PAUSED',paused_at=?,pause_reason=? WHERE permit_id=? AND status='ACTIVE'",
                 (now, ",".join(serious), row["permit_id"]),
@@ -1128,7 +1231,6 @@ class BridgeCore:
                 "INSERT INTO audit_log(occurred_at,actor,action,account_alias,object_id,details_json) VALUES(?,?,?,?,?,?)",
                 (now, actor, "PAUSE_LIMITED_AUTO", account.alias, row["permit_id"], json_text({"reasons": serious})),
             )
-        self._write_local_authorization(account, [], utc_now() + dt.timedelta(seconds=1), actor, new_id("auto_pause"), "PAUSED")
         return True
 
     def resume_limited_auto(self, account_alias, reason, confirm):
@@ -1207,10 +1309,63 @@ class BridgeCore:
         result = build_preview(request, account, *context)
         return self._apply_system_gates(connection, request, result, account)
 
+    def _refresh_trade_context(self, request):
+        account = self.config.account(request["account_alias"])
+        with self.database.connect() as connection:
+            current = self._build_current(connection, request)
+            stale = sorted(set(current["risk"]["reasons"]) & TRADE_REFRESH_REASONS)
+            heartbeat = connection.execute(
+                "SELECT * FROM heartbeats WHERE adapter_instance=?", (account.adapter_instance,),
+            ).fetchone()
+            adapter_ready = bool(
+                heartbeat and heartbeat["status"] == "READY" and
+                age_seconds(heartbeat["received_at"]) <= 15
+            )
+        if not stale or not adapter_ready:
+            return {
+                "attempted": False, "completed": not stale,
+                "reasons_before": stale, "reasons_after": stale,
+            }
+        instrument = request["instrument"]
+        try:
+            self.request_sync(
+                account.alias, ["ACCOUNT", "POSITION", "QUOTE"],
+                [instrument], purpose="TRADE",
+            )
+        except Exception as exc:
+            return {
+                "attempted": True, "completed": False,
+                "reasons_before": stale, "reasons_after": stale,
+                "error_type": type(exc).__name__,
+            }
+        deadline = time.monotonic() + account.risk_limits.trade_sync_timeout_ms / 1000.0
+        remaining = stale
+        while time.monotonic() < deadline:
+            time.sleep(account.risk_limits.trade_sync_poll_ms / 1000.0)
+            try:
+                self.ingester.scan_once()
+            except Exception as exc:
+                return {
+                    "attempted": True, "completed": False,
+                    "reasons_before": stale, "reasons_after": remaining,
+                    "error_type": type(exc).__name__,
+                }
+            with self.database.connect() as connection:
+                refreshed = self._build_current(connection, request)
+            remaining = sorted(set(refreshed["risk"]["reasons"]) & TRADE_REFRESH_REASONS)
+            if not remaining:
+                break
+        return {
+            "attempted": True, "completed": not remaining,
+            "reasons_before": stale, "reasons_after": remaining,
+        }
+
     def preview_trade(self, trade_request):
         request = validate_trade_request(trade_request)
+        refresh = self._refresh_trade_context(request)
         with self.database.transaction(immediate=True) as connection:
             result = self._build_current(connection, request)
+            result["trade_context_refresh"] = refresh
             now = utc_now()
             preview_id = new_id("preview")
             risk_id = new_id("risk")
@@ -1265,8 +1420,8 @@ class BridgeCore:
                 raise BridgeError("PREVIEW_ALREADY_CONSUMED", "preview has already been consumed")
             if self._mode(connection) != "MANUAL_LIVE" or request["execution_mode"] != "MANUAL_LIVE":
                 raise BridgeError("LIVE_NOT_ENABLED", "Worker and preview must be in MANUAL_LIVE")
-            if self._halted(connection):
-                raise BridgeError("LIVE_NOT_ENABLED", "trading is halted")
+            if self._halted(connection) and not request["action"].startswith("CLOSE_"):
+                raise BridgeError("LIVE_NOT_ENABLED", "trading is halted; only strict risk-reducing closes remain available")
             current = self._build_current(connection, request)
             if current["decision_fingerprint"] != row["decision_fingerprint"]:
                 raise BridgeError("SNAPSHOT_CHANGED", "risk decision changed; create a new preview")
@@ -1370,18 +1525,23 @@ class BridgeCore:
 
     def _check_submit_authorization(self, connection, row, request, approval_context, current):
         mode = self._mode(connection)
-        if self._halted(connection):
-            raise BridgeError("TRADING_HALTED", "trading is halted")
         if request["execution_mode"] != mode:
             raise BridgeError("MODE_MISMATCH", "preview mode does not match Worker mode")
+        risk_reducing = request["action"].startswith("CLOSE_")
+        if self._halted(connection):
+            if risk_reducing:
+                return {"type": "RISK_REDUCING_ONLY"}
+            raise BridgeError("TRADING_HALTED", "trading is halted; only strict risk-reducing closes remain available")
         if mode in {"OBSERVE_ONLY", "SIM_SIGNAL"}:
             return None
         if mode == "LIMITED_AUTO":
-            permit = self._active_auto_permit_row(connection, request["account_alias"])
+            permit = self._active_auto_permit_row(
+                connection, request["account_alias"], allow_paused=risk_reducing,
+            )
             if not permit:
                 raise BridgeError("AUTO_PERMIT_REQUIRED", "no active LIMITED_AUTO permit")
             reasons, policy, summary = self._limited_auto_policy_reasons(
-                connection, permit, request, current,
+                connection, permit, request, current, include_health=not risk_reducing,
             )
             if reasons:
                 raise BridgeError(
@@ -1413,11 +1573,13 @@ class BridgeCore:
         created = iso_now()
         envelopes = []
         with self.database.connect() as preflight_connection:
-            preflight_row, preflight_request, _, preflight_consumed = self._load_preview(
+            _, preflight_request, _, preflight_consumed = self._load_preview(
                 preflight_connection, preview_id,
             )
             if preflight_consumed:
                 return self.get_trade_intent(preflight_consumed)
+        self._refresh_trade_context(preflight_request)
+        with self.database.connect() as preflight_connection:
             preflight = self._build_current(preflight_connection, preflight_request)
         if preflight_request["execution_mode"] == "LIMITED_AUTO" and not preflight["risk"]["allowed"]:
             self._pause_active_auto_permit(

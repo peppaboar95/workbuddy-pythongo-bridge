@@ -598,7 +598,8 @@ except BridgeError as exc:
                   <tr data-page-node-id="U5JOsfeF0BLM8BzL4tmi1S"><td data-page-node-id="vJGBWdxWXM31vamjHgX752"><code data-page-node-id="j4GI5NN98RlO1zEaC4dn1E">halt_reason</code></td><td data-page-node-id="EoWuDmlmBzgMhFt1UptzsX">string</td><td data-page-node-id="aKxmC2MrJaEctukRtBzO3A">熔断原因，未熔断时为空串</td></tr>
                   <tr><td><code>observation_ready</code></td><td>bool</td><td>全部启用账户的连接、心跳、模式和保证金策略一致，可进行查询、同步和观察模式 Preview</td></tr>
                   <tr><td><code>trade_ready</code></td><td>bool</td><td>当前为非观察模式，且全部账户的 Profile、交易保护和运行门禁允许继续交易流程</td></tr>
-                  <tr><td><code>trade_protection</code></td><td>object</td><td><code>active</code>、<code>kind</code>、<code>reason</code>、<code>queries_available</code> 与 <code>blocked_operation</code>；<code>kind</code> 可为 <code>NONE</code>、<code>SETUP_LOCK</code>、<code>ACCOUNT_CHANGE</code>、<code>POLICY_REVIEW</code> 或 <code>INCIDENT_HALT</code></td></tr>
+                  <tr><td><code>protection_level</code></td><td>string</td><td><code>READY</code>、<code>PAUSE_NEW_OPEN</code> 或 <code>RISK_REDUCING_ONLY</code>；是否当前可实际减仓还应检查 <code>trade_protection.risk_reducing_allowed</code></td></tr>
+                  <tr><td><code>trade_protection</code></td><td>object</td><td><code>active</code>、<code>kind</code>、<code>reason</code>、<code>queries_available</code>、<code>blocked_operation</code> 与 <code>risk_reducing_allowed</code>；<code>kind</code> 还可能为 <code>SETUP_LOCK</code>、<code>ACCOUNT_CHANGE</code>、<code>POLICY_REVIEW</code>、<code>INCIDENT_HALT</code>、<code>LOCAL_HALT</code> 或 <code>PAUSE_NEW_OPEN</code></td></tr>
                   <tr data-page-node-id="ztv1UFeIqsvPIn3YPiGkDf"><td data-page-node-id="uqimeREYszVxasKba2SBFK"><code data-page-node-id="EoUCeeYKzvoHnvL3m6EHgU">accounts[]</code></td><td data-page-node-id="Xhgh7e0tg3eCkqZmZ3isRH">array</td><td data-page-node-id="BijS7vDHC3xj4E7D3cIV3D">每个启用账户一条，字段见下</td></tr>
                   <tr data-page-node-id="Ot7ZABXmVd85yLwh9gwdBB"><td data-page-node-id="3b0bTxogkMbnIMsmunDCm8"><code data-page-node-id="vOKnmUR4ZeehGp6WPG5kpR">unresolved_submit_unknown</code></td><td data-page-node-id="TjgkD8En1m7InW18624v4Q">int</td><td data-page-node-id="bjx45Pr2Nf8eGZyP9AEbWz">处于 <code data-page-node-id="5nCypDeLbGgU5QwYjNJ3XU">SUBMIT_UNKNOWN</code> 的意图数，大于 0 时应先人工核对</td></tr>
                   <tr data-page-node-id="UfqjHJ0PODwvP9IDzV4Aks"><td data-page-node-id="3dUwDO4On1BjPBPhEMDf6z"><code data-page-node-id="RHScN2GeszhqamRdrwfD2C">ready</code></td><td data-page-node-id="a7fajxAc0iSvaIad4IFKBG">bool</td><td data-page-node-id="UHVbqgFAtCnCob2iOZ9ZeO">全部账户就绪且未熔断</td></tr>
@@ -619,6 +620,7 @@ except BridgeError as exc:
                   <tr><td><code>connected</code></td><td>bool</td><td>Adapter 有未过期的 <code>READY</code> 心跳</td></tr>
                   <tr><td><code>observation_ready</code></td><td>bool</td><td>该账户的查询链路、模式和保证金策略一致</td></tr>
                   <tr><td><code>trade_ready</code></td><td>bool</td><td>该账户同时具备有效 Profile，且 Worker 与 Adapter 的交易保护均未开启</td></tr>
+                  <tr><td><code>protection_level</code> / <code>risk_reducing_allowed</code></td><td>string / bool</td><td>该账户当前保护级别，以及能否继续严格减仓</td></tr>
                   <tr data-page-node-id="ThxGNVNWzvQoclF5d8XZvL"><td data-page-node-id="h1d5b5729IX4f4PXsyBeRD"><code data-page-node-id="TDjyT9lSyq45GOEz4TOqiF">queue_depths</code></td><td data-page-node-id="NQnZAOzrF8s3HWiwWdGIyD">object</td><td data-page-node-id="uMCRcB5csrHRC4RoVy8Hl0"><code data-page-node-id="XRhZDqGibz4Hv7MNACvGBR">commands</code>、<code data-page-node-id="d4F0FLysFSG75oCoAkubmb">events</code>、<code data-page-node-id="sI799mf50AYKOvpobaCqUQ">dead_letter</code> 等队列深度</td></tr>
                   <tr data-page-node-id="1YWhFizln3HXx0eGRmC5wG"><td data-page-node-id="DtWHQtASeAkt4poi1rxZYv"><code data-page-node-id="UlL6WLyXk5YmpTZv6l8rXi">ready</code></td><td data-page-node-id="GCwxvrmQUAHxHDHjrtoJGI">bool</td><td data-page-node-id="QiJEr6DVFD1cl1tmp5JAoH">该账户是否就绪</td></tr>
                 </tbody>
@@ -646,7 +648,8 @@ print(health["mode"], health["trade_protection"])</pre>
     "kind": "ACCOUNT_CHANGE",
     "reason": "account binding changed",
     "queries_available": true,
-    "blocked_operation": "NEW_TRADES"
+    "blocked_operation": "RISK_INCREASING_TRADES",
+    "risk_reducing_allowed": false
   },
   "accounts": [
     {
@@ -789,6 +792,11 @@ print(health["mode"], health["trade_protection"])</pre>
                   <tr data-page-node-id="wxLlRZINaBbhUKVqmqao29"><td data-page-node-id="zxjlzAOBCfhMnJ9QcQpFTP"><code data-page-node-id="haEnNjQc9Iu6yrQdw2SC7b">max_daily_loss</code></td><td data-page-node-id="o8TEGgMsFj8KNTGpuia3Co">number</td><td data-page-node-id="3A1wN7m3Cws431L25jRqGP">当日最大亏损（浮亏 + 平仓盈亏）</td></tr>
                   <tr data-page-node-id="aZ8N6Hi9TzIuVwsvSfUwpM"><td data-page-node-id="4dBBDS0iklC7HNRwsbmKtd"><code data-page-node-id="07Ki0YscTzJF6eXSTG22Zr">max_snapshot_age_seconds</code></td><td data-page-node-id="d5h2QmGSSQDa9WrSAy09oY">int</td><td data-page-node-id="YiUslcb6MsbFB8EA4odkBL">账户 / 持仓快照最大年龄</td></tr>
                   <tr data-page-node-id="3bhsBgPbrsTbPy5EAtj9PD"><td data-page-node-id="VKQsaUAPkudseZV7Z42zci"><code data-page-node-id="VGJMwanX2grEamkK2ItPX9">max_quote_age_seconds</code></td><td data-page-node-id="1aiHodFN9HAyQzTSjpWKS5">int</td><td data-page-node-id="IQCBgcu8bxrAMOEm4CW6T6">行情快照最大年龄</td></tr>
+                  <tr><td><code>trade_max_snapshot_age_seconds</code> / <code>trade_max_quote_age_seconds</code></td><td>int</td><td>交易热路径的更短时效</td></tr>
+                  <tr><td><code>trade_sync_timeout_ms</code> / <code>trade_sync_poll_ms</code></td><td>int</td><td>陈旧数据拒绝前的一次主动同步等待参数</td></tr>
+                  <tr><td><code>max_*_equity_pct</code></td><td>number</td><td>单笔名义、单笔保证金、总保证金、日内亏损的权益比例上限</td></tr>
+                  <tr><td><code>max_price_deviation_pct</code> / <code>max_price_deviation_ticks</code></td><td>number / int</td><td>必须同时满足的双价格偏离</td></tr>
+                  <tr><td><code>account_equity</code> / <code>effective_amount_limits</code></td><td>number|null / object|null</td><td>按最新账户权益计算的当前实际金额上限</td></tr>
                   <tr data-page-node-id="X8kIO83UXhW6Kvcdav7AWM"><td data-page-node-id="f7EYH5T74ILiGfiGeJXSW3"><code data-page-node-id="GPKDULSKQH7SOAoQQF8GH8">preview_ttl_seconds</code></td><td data-page-node-id="dMFZfyX030OwMDotkXEmeK">int</td><td data-page-node-id="8L8ucx2ddRkw5m0cTcsaiY">Preview 有效期</td></tr>
                   <tr data-page-node-id="KbQ29FbielLjhIhBPlW0Ag"><td data-page-node-id="Eo23JsWeGG4CSVTYESBicB"><code data-page-node-id="2Eg9yJ7luHNsmbWpp34kIp">command_ttl_seconds</code></td><td data-page-node-id="obATahqYu25r75ImqcUXth">int</td><td data-page-node-id="LSTyMs5iQwOTJb49UpcRH7">下发指令消息有效期</td></tr>
                   <tr data-page-node-id="XHANZFd8JuTQuKOHAOLjFw"><td data-page-node-id="QeyrR6oDdxx9Th1sUoIPNe"><code data-page-node-id="GZweilWoTmH0D0UJevRJrE">max_auto_authorization_minutes</code></td><td data-page-node-id="ioOC0L7sMDoaywDExWjx9Q">int</td><td data-page-node-id="iiiXo6B7shgpdNpDaOUND0">LIMITED_AUTO 许可最长分钟数（≤720）</td></tr>
@@ -813,20 +821,30 @@ print(limits["max_order_volume"], limits["max_daily_orders"])</pre>
             <div class="code-card" data-page-node-id="XPWjhVDSjvCOvBXmAP8G2k">
               <div class="code-head" data-page-node-id="kVe9ZeCvq7d4HpjCyIPPGO"><span class="dot ok" data-page-node-id="rXLNvHFjtw1WO9mCMLEzAN"></span><span class="lab" data-page-node-id="wcgROZcvOgL8FO8fmRLGqL">JSON · 响应 data</span><button class="copy" type="button" data-page-node-id="dbEPCLAiCnCKm6EXlSIXRD">复制</button></div>
 <pre data-lang="json" data-page-node-id="X81eKb4FF5yCRAYm8BmtOZ">{
-  "max_order_volume": 2,
-  "max_order_notional": 1000000.0,
-  "max_position_volume_per_instrument": 2,
-  "max_total_position_volume": 6,
-  "max_margin_per_order": 100000.0,
-  "max_total_margin": 400000.0,
+  "max_order_volume": 5,
+  "max_order_notional": 500000.0,
+  "max_position_volume_per_instrument": 20,
+  "max_total_position_volume": 100,
+  "max_margin_per_order": 50000.0,
+  "max_total_margin": 200000.0,
   "max_risk_ratio": 0.8,
-  "max_daily_orders": 20,
-  "max_daily_cancels": 20,
-  "max_daily_loss": 5000.0,
-  "max_snapshot_age_seconds": 15,
-  "max_quote_age_seconds": 10,
-  "preview_ttl_seconds": 60,
-  "command_ttl_seconds": 30,
+  "max_daily_orders": 50,
+  "max_daily_cancels": 100,
+  "max_daily_loss": 10000.0,
+  "max_snapshot_age_seconds": 90,
+  "max_quote_age_seconds": 30,
+  "trade_max_snapshot_age_seconds": 30,
+  "trade_max_quote_age_seconds": 5,
+  "trade_sync_timeout_ms": 1200,
+  "trade_sync_poll_ms": 50,
+  "max_order_notional_equity_pct": 1.0,
+  "max_margin_per_order_equity_pct": 0.1,
+  "max_total_margin_equity_pct": 0.5,
+  "max_daily_loss_equity_pct": 0.05,
+  "max_price_deviation_pct": 0.02,
+  "max_price_deviation_ticks": 20,
+  "preview_ttl_seconds": 120,
+  "command_ttl_seconds": 60,
   "max_auto_authorization_minutes": 720,
   "max_auto_session_notional": 1000000.0,
   "max_auto_orders": 100,
@@ -835,7 +853,14 @@ print(limits["max_order_volume"], limits["max_daily_orders"])</pre>
   "max_auto_instrument_position_notional": 1000000.0,
   "max_auto_account_drawdown": 20000.0,
   "auto_heartbeat_max_age_seconds": 15,
-  "auto_max_queue_depth": 20
+  "auto_max_queue_depth": 20,
+  "account_equity": 200000.0,
+  "effective_amount_limits": {
+    "max_order_notional": 200000.0,
+    "max_margin_per_order": 20000.0,
+    "max_total_margin": 100000.0,
+    "max_daily_loss": 10000.0
+  }
 }</pre>
             </div>
           </div>
@@ -1789,7 +1814,7 @@ if not st["active"]:
           <span class="sig" data-page-node-id="BW7QSaOh4eLZel9QS9wuj3">core.preview_trade(trade_request)</span>
         </div>
         <p class="ep-desc" data-page-node-id="hWI1CEOjyIESehsae3L2Fz">
-          归一化交易请求、按今昨仓策略拆分子单、执行全部本地硬风控，并落库一份带有效期的预览。
+          归一化交易请求、按今昨仓策略拆分子单、执行全部本地硬风控，并落库一份带有效期的预览。资金、持仓或行情缺失/陈旧时，会先自动发起一次不含 K 线的交易同步。
           <strong data-page-node-id="EAxBbWAX2r6Lp3X4imhA7a">不会生成任何可执行指令。</strong>返回的 <code data-page-node-id="cM37aKn91J0MWdFjwYVyK0">decision_fingerprint</code> 会在提交时重新计算并比对，快照变化即失效。
         </p>
         <div class="ep-body" data-page-node-id="LhtiIaGDWGElQBNCvBgkNJ">
@@ -1803,7 +1828,7 @@ if not st["active"]:
                   <tr data-page-node-id="XSVRqElboSllfjIxlzNIML"><td data-page-node-id="C7vbrfThQVciZ7GxrDhTxR"><code data-page-node-id="FEuGJBElugOGUPQaa9Iv0Q">instrument</code></td><td data-page-node-id="j9zM7qLTqWeP0UTAMTwYDV">object</td><td data-page-node-id="fwcpkEcieANfAwVL8N1kFo"><span class="req" data-page-node-id="azQti9A3DolpYjFdFgpRE7">必填</span></td><td data-page-node-id="QsXWMU57Sxu0EcIkS4Ezip">仅含 <code data-page-node-id="8PbCAGMPOQFmjYEtdpnAKQ">exchange</code>、<code data-page-node-id="y1ubZI0aV1YlYCVbdHfo8u">instrument_id</code></td></tr>
                   <tr data-page-node-id="V9AueSpIT0zjuF0cCdWhjh"><td data-page-node-id="LaE4Hnt5QCNP4pDU8CddhM"><code data-page-node-id="He956PIosgTrPXhbPRPGLx">action</code></td><td data-page-node-id="IDrfNvMZlUHaJeS6Bx6S2F">string</td><td data-page-node-id="7Kwvt9Vi8MvKiftBKFYo5O"><span class="req" data-page-node-id="KdKDVLMLEEOdCXNfT7lqsR">必填</span></td><td data-page-node-id="ETkWLOLmWchVihLo2O8tOP"><code data-page-node-id="TXJbqLE3HlJTiwcB3SpGZO">OPEN_LONG</code>、<code data-page-node-id="4pXyAfbmi144KBt2QC1QLC">OPEN_SHORT</code>、<code data-page-node-id="LjFFzH3WUbj6GIgGdDOTA0">CLOSE_LONG</code>、<code data-page-node-id="b4rAgJ9h5uZBT3nHwNfL3l">CLOSE_SHORT</code>、<code data-page-node-id="gn69lkipqdHwkFbdz2yK0U">CLOSE_TODAY_LONG</code>、<code data-page-node-id="naSBCHG08foMsO8cwbguGH">CLOSE_TODAY_SHORT</code>、<code data-page-node-id="RRmrcrYUuu0QEUulBF88UT">CLOSE_YESTERDAY_LONG</code>、<code data-page-node-id="w4md6RWW157RetjaJJ5Lcp">CLOSE_YESTERDAY_SHORT</code></td></tr>
                   <tr data-page-node-id="ldAHOUe1GFyundigj1Qulz"><td data-page-node-id="Kg8uwZWA0H3w679RA0Y9oL"><code data-page-node-id="EeKFbmUcIg6KsmhbdBBjfU">sizing</code></td><td data-page-node-id="k1FELHh7FmtsXbJHsVJ1RS">object</td><td data-page-node-id="kkAXcuKRq5OnyYAb2yz0wP"><span class="req" data-page-node-id="3LcayQYBa5R8iTlqTcq5Wb">必填</span></td><td data-page-node-id="HhqHSSNluk5XGFsp28adlL"><code data-page-node-id="mNyeBCvkvAd97rUPxMWA9x">{type:"FIXED_VOLUME", value:&lt;正整数&gt;}</code></td></tr>
-                  <tr data-page-node-id="Xvr55o0qh7yIrTBDCHM8AU"><td data-page-node-id="LZKNDAqZrUacp68VWjsh5Z"><code data-page-node-id="zsShvgIf5IFyvrUa1XTG56">price_policy</code></td><td data-page-node-id="WboF8DeVBar4PSetDlcdRc">object</td><td data-page-node-id="r55F8PgFxaykVGTHEgHU66"><span class="req" data-page-node-id="JdADpmnlvqOAEEkvBRCO04">必填</span></td><td data-page-node-id="8z8rBl1Ej0GO9QxarUi6SR"><code data-page-node-id="02V2qna7EowQ2HCvoSzRyT">{type:"FIXED_LIMIT", limit_price:&gt;0, max_deviation_pct:0–1}</code>，<code data-page-node-id="ClMtdixC4WFyDq80CC6KMr">max_deviation_pct</code> 默认 0.02</td></tr>
+                  <tr data-page-node-id="Xvr55o0qh7yIrTBDCHM8AU"><td data-page-node-id="LZKNDAqZrUacp68VWjsh5Z"><code data-page-node-id="zsShvgIf5IFyvrUa1XTG56">price_policy</code></td><td data-page-node-id="WboF8DeVBar4PSetDlcdRc">object</td><td data-page-node-id="r55F8PgFxaykVGTHEgHU66"><span class="req" data-page-node-id="JdADpmnlvqOAEEkvBRCO04">必填</span></td><td data-page-node-id="8z8rBl1Ej0GO9QxarUi6SR"><code data-page-node-id="02V2qna7EowQ2HCvoSzRyT">{type:"FIXED_LIMIT", limit_price:&gt;0, max_deviation_pct?:0–1, max_deviation_ticks?:正整数}</code>；百分比与 Tick 数必须同时满足</td></tr>
                   <tr data-page-node-id="OZEJtGOpvvnS1Vqw0dnGwv"><td data-page-node-id="gU3nGeDWW7LCWMkdiomBy4"><code data-page-node-id="j0ySxdFBupwHFCCEBYVxi5">close_policy</code></td><td data-page-node-id="22WEIOHJ1d3ClS0kSQUoPG">string</td><td data-page-node-id="Abrz1IzEJ1um1dVsAFSPKN"><span class="opt" data-page-node-id="uvXelAeMYsghdzo2uyrDDd">可选</span></td><td data-page-node-id="cn9dvJUp4hbF5cFK6yfMdr"><code data-page-node-id="xhjgLVYukkKpCvDynqn1Aa">TODAY_FIRST</code> / <code data-page-node-id="PMGk7UE2rotmtWcv6TJXpc">YESTERDAY_FIRST</code> / <code data-page-node-id="AgQeSgrgL9dQngnXc52f04">EXPLICIT_ONLY</code>，缺省用账户配置</td></tr>
                   <tr data-page-node-id="fs3klo23YMWcvKx65eM7F8"><td data-page-node-id="XVczF1dHWc0bPqdvruyrIi"><code data-page-node-id="IC3h0iAodcHEfVHXjLkbMV">hedge_flag</code></td><td data-page-node-id="0HEri8PvXFOSTYRAKn3j4E">string</td><td data-page-node-id="5fNQNzo4pt780SAHCei6cP"><span class="req" data-page-node-id="jc4K2sskPP5HBLigDHXGZC">必填</span></td><td data-page-node-id="gBa9y21SWLfglCeZRLJsOZ">v1 仅支持 <code data-page-node-id="10kezDbpilzvOC777lA9HC">SPECULATION</code></td></tr>
                   <tr data-page-node-id="5SsAOWxhV2Gwyz0Wnw2fVn"><td data-page-node-id="fCpZqExsOW9UzAHYgAqBZ9"><code data-page-node-id="qnImFFBh41FkeMY7ohSQjY">execution_mode</code></td><td data-page-node-id="dqYWEXIiJ1bn1ofyMsdDO9">string</td><td data-page-node-id="RtAQTCs3UqbBx0jrGpFlPM"><span class="req" data-page-node-id="JvGlDCJlRR40lPNzmJAsc3">必填</span></td><td data-page-node-id="TAyvSY1Zl8H9EZbVec66Ue">必须与 Worker 当前模式一致，否则 <code data-page-node-id="U8zYUISnUjFJkFbQ7MPKHM">MODE_MISMATCH</code></td></tr>
@@ -1821,6 +1846,8 @@ if not st["active"]:
                   <tr data-page-node-id="wjJ2syGGPc0ceGewGt9UWv"><td data-page-node-id="HkkQSnNB19T877PmqjF0Cp"><code data-page-node-id="BGWo2OmWHi7fkUzNz5SuH0">children[]</code></td><td data-page-node-id="KwG6TLltkXnXFkFXJqfnxW">array</td><td data-page-node-id="YFhE9W9Uiym5xCoLCNh706">拆分后的子单：<code data-page-node-id="TkiFnPxEAEAhEnkPRgCjIa">action</code>、<code data-page-node-id="ZLPuEqjDVNsrPaOG1jlsNO">direction</code>、<code data-page-node-id="nH6764wrqaaJXaapkAq7kE">offset</code>、<code data-page-node-id="7m3pRUVzJFsiFBmE7pJuLo">volume</code></td></tr>
                   <tr data-page-node-id="tgufu1DICZxlXPlmcRSPc2"><td data-page-node-id="OlCi1qz58ehOT8eTtAeWmd"><code data-page-node-id="P2GbEM1Vl3aw37GUqtdOxT">resolved_limit_price</code> / <code data-page-node-id="aTHYQNAkPaV2gYt962pFGf">notional</code> / <code data-page-node-id="FjosWJti4nup1CI0v3OyFv">margin_estimate</code></td><td data-page-node-id="ERP5jTCUtMsZQjyHZOcsEg">number</td><td data-page-node-id="4oTUmnTPUli2CnKJldDStq">最终价格、名义金额与保证金估算</td></tr>
                   <tr data-page-node-id="UAUZAPBQcfYUEmoxMZRvOT"><td data-page-node-id="7O1YY945sU9fq6jWtsDJAi"><code data-page-node-id="nBixgQQQhu2VOtYreH5RIo">risk</code></td><td data-page-node-id="JPWe5NXGianLoGBURLocnw">object</td><td data-page-node-id="lGq894X7lRJmwStsIV1QmM"><code data-page-node-id="DG4dXl0GczG65dbie3RjOh">{allowed, reasons[]}</code>，<code data-page-node-id="ojMIaea1w9mZfZqbanEX1a">reasons</code> 见<a href="#errors" data-page-node-id="4TYanUqaUQduFCCejE652F">风控原因</a></td></tr>
+                  <tr><td><code>trade_context_refresh</code></td><td>object</td><td>是否在拒绝前主动同步，以及同步前后的陈旧原因</td></tr>
+                  <tr><td><code>protection_level</code></td><td>string</td><td><code>READY</code> / <code>PAUSE_NEW_OPEN</code> / <code>RISK_REDUCING_ONLY</code></td></tr>
                   <tr data-page-node-id="64BUlA3H8EEhVCWmj1pxU7"><td data-page-node-id="woRILHW55O5P7Xd67zoDvs"><code data-page-node-id="5HrYnaZ6vesuL2II9pRdlJ">decision_material</code> / <code data-page-node-id="QNEk2UctzFBKDXBs9fYLyv">decision_fingerprint</code></td><td data-page-node-id="J068RNBZFre6cgV5oEQa3K">object / string</td><td data-page-node-id="TBGj76nYa2RU3mn9DyIdV2">决策材料与其哈希，提交时比对</td></tr>
                 </tbody>
               </table>
@@ -1837,7 +1864,8 @@ if not st["active"]:
     "price_policy": {
         "type": "FIXED_LIMIT",
         "limit_price": 782.34,
-        "max_deviation_pct": 0.02},
+        "max_deviation_pct": 0.02,
+        "max_deviation_ticks": 5},
     "close_policy": "TODAY_FIRST",
     "hedge_flag": "SPECULATION",
     "execution_mode": "OBSERVE_ONLY",
@@ -2420,7 +2448,7 @@ if not ready["ready"]:
           <span class="sig" data-page-node-id="0BIfrG9VCA5VbLE0LOfW2R">core.halt_trading(reason)</span>
         </div>
         <p class="ep-desc" data-page-node-id="o3YPugSZ0XwIZeAyfx1DFG">
-          全局熔断，失败关闭。立即清空定时会话与未使用批准、撤销全部 LIMITED_AUTO 许可，并向每个启用账户写入本地熔断文件。
+          全局熔断，失败关闭。立即清空定时会话与未使用批准、撤销全部 LIMITED_AUTO 许可，并向每个启用账户写入本地熔断文件。风险增加型开仓被禁止；撤单和经有效 Profile、新鲜目标持仓与可平量严格证明的减仓仍可执行。
           <strong data-page-node-id="c0hMc4Trl0R5y5DNdaDRcM">只能由本机 Console 解除</strong>，解除后强制回到 <code data-page-node-id="fltS2k0ACRmuSfBD4jUqXe">OBSERVE_ONLY</code>。
         </p>
         <div class="ep-body" data-page-node-id="YRcC3ff2BkCFc7PPbkPkVl">
@@ -2607,7 +2635,7 @@ except BridgeError as exc:
                 <tr data-page-node-id="3EzhRomdk2rrApPORYIQ3X"><td data-page-node-id="yJCmVzeHFmO2tE4HuXcmMt"><code data-page-node-id="kQ4HjoeiNtzIWY74sBLcJV">AUTO_STRATEGY_REAUTHORIZATION_REQUIRED</code></td><td data-page-node-id="gblOPH9MxjfbrTvZbKBMtG">连续失败达到上限，必须换 <code data-page-node-id="8bCLHASpZ1Grob6u9Fki1W">rule_version</code> 重新签发许可</td></tr>
 
                 <tr data-page-node-id="nNkXj3k9q7Mmh8xizRp31G"><td colspan="2" style="background:var(--surface-2);font-weight:700;font-size:12px;letter-spacing:.06em;color:var(--muted)" data-page-node-id="iHDP6eP01Eq0o8QMgWynYD">熔断与对账</td></tr>
-                <tr data-page-node-id="FAKGb7A9h7NhnraRxZ4d5D"><td data-page-node-id="Y6cw9mylT1Iwbgz8a0jcnP"><code data-page-node-id="IxyXR6PCfuDXGEGV2SaCaq">TRADING_HALTED</code></td><td data-page-node-id="gLTHkGdwPxJQpn7FjDhANs">已熔断。禁止重试任何交易动作，需本机 Console 解除并回到 <code data-page-node-id="Hu9K1vkmLe2eL5nEtqiZWo">OBSERVE_ONLY</code></td></tr>
+                <tr data-page-node-id="FAKGb7A9h7NhnraRxZ4d5D"><td data-page-node-id="Y6cw9mylT1Iwbgz8a0jcnP"><code data-page-node-id="IxyXR6PCfuDXGEGV2SaCaq">TRADING_HALTED</code></td><td data-page-node-id="gLTHkGdwPxJQpn7FjDhANs">已熔断。禁止风险增加型交易；撤单与严格减仓仍可用。解除需本机 Console，并回到 <code data-page-node-id="Hu9K1vkmLe2eL5nEtqiZWo">OBSERVE_ONLY</code></td></tr>
 
                 <tr data-page-node-id="umB0AYfwIyJLzWQYfqJ1hq"><td colspan="2" style="background:var(--surface-2);font-weight:700;font-size:12px;letter-spacing:.06em;color:var(--muted)" data-page-node-id="BvpLVoIFO5nRibVHpX9UJG">消息、队列与签名</td></tr>
                 <tr data-page-node-id="2LPqkh2bCLbvWBRFDFyj1u"><td data-page-node-id="srNU2hn25c8di52LEH3j4H"><code data-page-node-id="apmxRpa3mCWlCbLwXAra34">MESSAGE_SCHEMA_INVALID</code></td><td data-page-node-id="MQHiomiAGIFWbdrIU7Zl5M">信封字段集、协议版本或消息类型非法</td></tr>
@@ -2694,8 +2722,10 @@ except BridgeError as exc:
             <tr data-page-node-id="UgvJLZhvPR7cY32NCQGqQH"><td data-page-node-id="A8Lhcix4esNgBXZIkfjch6">请求体大小</td><td data-page-node-id="reAHnUmMjTnUtoXaXoBH66"><code data-page-node-id="GVuZJZBEnOsekzaOvPE96n">max_message_bytes</code> = 65536（1024–16777216）</td><td data-page-node-id="fEOHH2fyrXE5WBmD6S3yya"><code data-page-node-id="8ImsEU2AqvfRk7sjFZo6FU">INVALID_REQUEST · invalid request size</code></td></tr>
             <tr data-page-node-id="wdpUyNsRdOdyHkuk922GQA"><td data-page-node-id="ixoWIy82CqFEA2LXNQgUXT">绑定地址</td><td data-page-node-id="8cCfaOj2mE6u8KbvCwIo0T">必须为回环地址（默认 <code data-page-node-id="IjOc9tEeOLYyzLLcXB3mkI">127.0.0.1:17662</code>）</td><td data-page-node-id="HQ31ZeXE7EcN1ykWx1kYAH">配置阶段 <code data-page-node-id="nIk5lZRxzHJHWfKWOgHrBP">CONFIG_ERROR</code>，Worker 拒绝启动</td></tr>
             <tr data-page-node-id="T1n5Mu2PSGijHcghXW8DLv"><td data-page-node-id="EaoB3eDyZQqJjvA4ulhwE9">Adapter 心跳时效</td><td data-page-node-id="EYN4tGefUaOPsINF0lY4xv"><code data-page-node-id="EdqbJeaYAHUHLuH9BDEUD9">auto_heartbeat_max_age_seconds</code> = 15（5–60）</td><td data-page-node-id="oF5UdvbZeXhBGE3uVt7j7N"><code data-page-node-id="HyAM2dWgpSG1oUuOjFO8SR">ADAPTER_STALE</code> / <code data-page-node-id="n0ExLD4JgFaWfA1zoNC5qb">AUTO_ADAPTER_NOT_READY</code></td></tr>
-            <tr data-page-node-id="VqDatf9gfrBjNTH68ahMns"><td data-page-node-id="y63VaQsAEFHmgFpfsBCUOl">账户 / 持仓快照时效</td><td data-page-node-id="nlaOTvKEhI85eDHc6FLoND"><code data-page-node-id="Gv7R6mlri1rSQ5aFeUcADM">max_snapshot_age_seconds</code>（默认 15）</td><td data-page-node-id="FAnaMd9cFvmuCTFytiZCar"><code data-page-node-id="Yp6SOPAhxCOP6g08LQdsg2">ACCOUNT_SNAPSHOT_STALE</code> / <code data-page-node-id="Yu0M2ATXm1P724q74SDmVR">POSITION_STALE</code></td></tr>
-            <tr data-page-node-id="ABB3oslBvdedRlLllWdwJA"><td data-page-node-id="HZl18hKXPuHCeJszElILQI">行情快照时效</td><td data-page-node-id="bQZNqmenSSjqx10YPBGEIm"><code data-page-node-id="PUQ5dC4jUhcXlPNe2VvokT">max_quote_age_seconds</code>（默认 10）</td><td data-page-node-id="z93nSI7GYE76skQHbqMp5x"><code data-page-node-id="DDQ62ObTYoE2T3mJUdXZ32">QUOTE_STALE</code></td></tr>
+            <tr data-page-node-id="VqDatf9gfrBjNTH68ahMns"><td data-page-node-id="y63VaQsAEFHmgFpfsBCUOl">交易账户 / 持仓时效</td><td data-page-node-id="nlaOTvKEhI85eDHc6FLoND"><code data-page-node-id="Gv7R6mlri1rSQ5aFeUcADM">trade_max_snapshot_age_seconds</code>（均衡默认 30 秒）</td><td data-page-node-id="FAnaMd9cFvmuCTFytiZCar"><code data-page-node-id="Yp6SOPAhxCOP6g08LQdsg2">ACCOUNT_SNAPSHOT_STALE</code> / <code data-page-node-id="Yu0M2ATXm1P724q74SDmVR">POSITION_STALE</code>；拒绝前主动同步一次</td></tr>
+            <tr data-page-node-id="ABB3oslBvdedRlLllWdwJA"><td data-page-node-id="HZl18hKXPuHCeJszElILQI">交易行情时效</td><td data-page-node-id="bQZNqmenSSjqx10YPBGEIm"><code data-page-node-id="PUQ5dC4jUhcXlPNe2VvokT">trade_max_quote_age_seconds</code>（均衡默认 5 秒）</td><td data-page-node-id="z93nSI7GYE76skQHbqMp5x"><code data-page-node-id="DDQ62ObTYoE2T3mJUdXZ32">QUOTE_STALE</code>；拒绝前主动同步一次</td></tr>
+            <tr><td>金额双上限</td><td><code>max_* </code>绝对值与对应 <code>max_*_equity_pct</code> 权益比例取较小值</td><td><code>MAX_ORDER_NOTIONAL</code> / <code>MAX_MARGIN_PER_ORDER</code> / <code>MAX_TOTAL_MARGIN</code> / <code>MAX_DAILY_LOSS</code></td></tr>
+            <tr><td>价格双偏离</td><td><code>max_price_deviation_pct</code> 与 <code>max_price_deviation_ticks</code> 同时满足</td><td><code>PRICE_DEVIATION_EXCEEDED</code></td></tr>
             <tr data-page-node-id="HwwLjfvDCniY3Q3oS4tvcJ"><td data-page-node-id="XdE6wGs3xxjBQk7jrU6IeD">预览有效期</td><td data-page-node-id="uX1wVFos46m1AtPzqBdRfF"><code data-page-node-id="UYxy7eMi3RJiYWDAsfot11">preview_ttl_seconds</code>（默认 60）</td><td data-page-node-id="JadeFdvtfJDbrWJEJYOOjt"><code data-page-node-id="5F1WEoOPbyRHPwtlMkWkle">PREVIEW_EXPIRED</code></td></tr>
             <tr data-page-node-id="gsDYcb8PPE20owqTTdhwW7"><td data-page-node-id="llTrDenIZpOHD8ucfexU7r">指令有效期</td><td data-page-node-id="l4Ue9m9hqPUSbY2E0nCFYm"><code data-page-node-id="OmdixIXUlgHXabczLhIcDo">command_ttl_seconds</code>（默认 30）</td><td data-page-node-id="l900mFaOu2DoED6eqxu87M">消息侧 <code data-page-node-id="2xf33rsaDMwBEtpVZfPGUE">MESSAGE_EXPIRED</code></td></tr>
             <tr data-page-node-id="zERHzUe3Srxe1ym7mgoE47"><td data-page-node-id="YWaWMa5YEHO170DIZohW2R">当日委托 / 撤单</td><td data-page-node-id="yepAPIiq3Mxt1eTwlmyHu5"><code data-page-node-id="3EiJPS0RRocNNeD82aUvg7">max_daily_orders</code> / <code data-page-node-id="x8ODn24v7Rhv4dQqCZKOyR">max_daily_cancels</code></td><td data-page-node-id="CKOX9Db8npgn3uQaVMhJrj"><code data-page-node-id="wdsPKWsVLyIkuXZOHvlBJ6">MAX_DAILY_ORDERS</code> / <code data-page-node-id="o0r3qXLcqvik1UFSOuxqi1">MAX_DAILY_CANCELS</code></td></tr>
@@ -2723,8 +2753,8 @@ except BridgeError as exc:
           <p data-page-node-id="xd8CcxgQzxVV8qUS7S8vdt"><code data-page-node-id="qrEuCMswAgpdTJfDTQQSOy">PRE_SUBMIT</code>、<code data-page-node-id="tgcypJsfCsrpGZr3vwlAiK">SUBMIT_CALLED</code>、<code data-page-node-id="7nP19HQJIohXrF5Z84u0Ut">SUBMIT_UNKNOWN</code> 一律不得自动重发——先读 <code data-page-node-id="hBQJZ8KcqKVNyyE2gJVcl5">get_trade_intent</code> 与柜台实际状态，再人工决定。</p>
         </div>
         <div class="card" data-page-node-id="vLhIVIza3Jhl1ItaAlDkED">
-          <h5 data-page-node-id="TWJ5dHNvZDA6sr81RzgIJn">熔断后停止一切重试</h5>
-          <p data-page-node-id="1guTfjR6uvCTeV9Xww1372">收到 <code data-page-node-id="DH9H6RQlYwoy7iyLFNqR8G">TRADING_HALTED</code> 应立即停止所有交易类调用；熔断只能由本机 Console 解除，解除后强制回到 <code data-page-node-id="aYZc5HpFp2nTrpruAH6w8T">OBSERVE_ONLY</code>。</p>
+          <h5 data-page-node-id="TWJ5dHNvZDA6sr81RzgIJn">熔断后停止增仓重试</h5>
+          <p data-page-node-id="1guTfjR6uvCTeV9Xww1372">收到 <code data-page-node-id="DH9H6RQlYwoy7iyLFNqR8G">TRADING_HALTED</code> 应停止风险增加型交易；撤单和严格减仓仍可继续。熔断只能由本机 Console 解除，解除后强制回到 <code data-page-node-id="aYZc5HpFp2nTrpruAH6w8T">OBSERVE_ONLY</code>。</p>
         </div>
       </div>
 
@@ -2763,6 +2793,17 @@ def submit_with_retry(core, trade_request, attempts=4):
       <p class="sub" data-page-node-id="JuKQ3sBGbsUDk3OMnCa9AS">版本号遵循 Semantic Versioning。当前文档对应 <strong data-page-node-id="mAb6xC2clJNlYAF2xmDxAt">0.3.8</strong>；破坏性变更会通过主版本号发布，并在发布说明中给出迁移步骤。</p>
 
       <div class="timeline" data-page-node-id="X5nMupQZmIb9HT7ZWElzGA">
+        <div class="tl-item">
+          <div class="date">开发分支 · 尚未发布</div>
+          <h5>P0/P1/P2 可用性改造</h5>
+          <ul>
+            <li>恢复 .processing 命令，TICK_DISPATCH 只响应目标合约 Tick</li>
+            <li>熔断和 PAUSE_NEW_OPEN 保留严格减仓与撤单</li>
+            <li>陈旧交易快照拒绝前主动同步，不请求 K 线</li>
+            <li>绝对值＋权益比例双上限，百分比＋Tick 双价格偏离</li>
+            <li>首次配置提供三套风控预设</li>
+          </ul>
+        </div>
         <div class="tl-item">
           <div class="date">2026-09-12</div>
           <h5>0.3.8 — Windows 快捷方式兼容修复（当前）</h5>

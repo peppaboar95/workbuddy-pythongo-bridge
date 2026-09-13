@@ -8,7 +8,7 @@ import shutil
 import socket
 import sys
 
-from .bootstrap import initialize
+from .bootstrap import RISK_PRESETS, initialize
 from .config import load_config
 from .console import bind_investor, get_non_observe_mode_blockers, set_mode
 from .doctor import run_doctor
@@ -447,6 +447,22 @@ def _ask_path(prompt, default, input_func=input):
     return os.path.abspath(os.path.expandvars(value or default))
 
 
+def _select_risk_preset(input_func=input):
+    choices = {
+        "1": ("SMALL_CONSERVATIVE", "小账户保守：1手、较低资金占用和5 Tick偏离（推荐新手）"),
+        "2": ("MANUAL_BALANCED", "人工均衡：保留较宽的人工交易额度"),
+        "3": ("LIMITED_AUTO", "自动策略：单笔更小、频率额度更高、行情更新更严格"),
+    }
+    print("请选择开箱即用的风控预设；金额上限与账户权益比例会同时生效。")
+    for key in ("1", "2", "3"):
+        print("  %s. %s" % (key, choices[key][1]))
+    while True:
+        answer = input_func("风控预设 [1]：").strip() or "1"
+        if answer in choices:
+            return choices[answer][0]
+        print("请输入1、2或3；直接按Enter使用小账户保守预设。")
+
+
 def run_setup(
     default_root,
     input_func=input,
@@ -455,6 +471,7 @@ def run_setup(
     legacy_root=None,
     pointer_path=None,
     strategy_candidates=None,
+    risk_preset=None,
 ):
     _header("WorkBuddy-PythonGO首次配置向导")
     print("所有新环境固定从OBSERVE_ONLY开始。")
@@ -478,7 +495,16 @@ def run_setup(
         if runtime_discovery.get("stale_pointer"):
             print("提示：上次保存的位置已不存在，已安全回退：%s" % runtime_discovery["stale_pointer"])
     root = _ask_path("运行目录", runtime_discovery["path"], input_func)
-    init_result = initialize(root)
+    new_runtime = not _is_runtime_root(root)
+    selected_risk_preset = None
+    if new_runtime:
+        if risk_preset is not None and risk_preset not in RISK_PRESETS:
+            raise BridgeError("INVALID_REQUEST", "未知风控预设：%s" % risk_preset)
+        selected_risk_preset = risk_preset or _select_risk_preset(input_func)
+        print("新runtime将使用风控预设：%s" % selected_risk_preset)
+    elif risk_preset:
+        print("检测到已有runtime；为避免静默覆盖，本次不改动现有风控参数。")
+    init_result = initialize(root, risk_preset=selected_risk_preset or "MANUAL_BALANCED")
     config_path = init_result["config"]
     pointer_result = remember_runtime_root(root, pointer_path)
     if init_result["created"]:
@@ -586,6 +612,7 @@ def run_setup(
         "binding": bind_result,
         "deployment": deployment_result,
         "shortcuts": shortcut_result,
+        "risk_preset": selected_risk_preset or "EXISTING_CONFIG",
     }
 
 
@@ -682,6 +709,8 @@ def print_status_human(config_path, probe, issues):
         print("运行模式：%s" % mode)
         protection = health.get("trade_protection") or {}
         protection_kind = protection.get("kind") or ("INCIDENT_HALT" if health.get("halted") else "NONE")
+        protection_level = health.get("protection_level") or "READY"
+        risk_reducing_allowed = protection.get("risk_reducing_allowed") is True
         if health.get("halted") or protection.get("active"):
             if protection_kind == "SETUP_LOCK" and not health.get("halted"):
                 print("交易状态：尚未启用（首次配置状态，不是故障或熔断）。")
@@ -689,10 +718,22 @@ def print_status_human(config_path, probe, issues):
             elif protection_kind == "POLICY_REVIEW":
                 print("交易状态：保证金策略需要复核；查询不受影响。")
                 print("原因：%s" % (health.get("halt_reason") or protection.get("reason") or "未记录"))
+            elif protection_level == "PAUSE_NEW_OPEN" and risk_reducing_allowed:
+                print("交易保护：已暂停开仓；严格减仓和撤单仍可用。")
+                print("原因：%s" % (health.get("halt_reason") or protection.get("reason") or "自动策略瞬态保护"))
+            elif protection_level == "RISK_REDUCING_ONLY" and risk_reducing_allowed:
+                print("交易保护：仅允许严格减仓和撤单。")
+                print("原因：%s" % (health.get("halt_reason") or protection.get("reason") or "本地交易保护已开启"))
+            elif protection_level in {"PAUSE_NEW_OPEN", "RISK_REDUCING_ONLY"}:
+                print("交易保护：风险增加型交易已阻止；当前减仓门禁尚未全部满足，撤单仍可用。")
+                print("原因：%s" % (health.get("halt_reason") or protection.get("reason") or "请检查模式、Profile、心跳和保证金策略"))
             else:
                 print("交易保护：已开启；原因：%s" % (health.get("halt_reason") or protection.get("reason") or "未记录"))
             if health.get("observation_ready") or protection.get("queries_available"):
-                print("查询状态：可用；仅阻止新的交易提交。")
+                if protection_level in {"PAUSE_NEW_OPEN", "RISK_REDUCING_ONLY"}:
+                    print("查询状态：可用；风险增加型交易已被阻止。")
+                else:
+                    print("查询状态：可用；仅阻止新的交易提交。")
         elif mode == "OBSERVE_ONLY":
             print("交易保护：观察模式；查询、预览和空跑闭环可用。")
         print("\n账户与PythonGO Adapter：")
@@ -702,12 +743,13 @@ def print_status_human(config_path, probe, issues):
             if observation_ready is None:
                 observation_ready = account.get("ready")
             print("  - %s：查询链路%s" % (account.get("account_alias", "<unknown>"), "可用" if observation_ready else "不可用"))
-            print("      Adapter=%s；心跳=%s；模式=%s；Profile=%s；交易保护=%s" % (
+            print("      Adapter=%s；心跳=%s；模式=%s；Profile=%s；保护级别=%s；可减仓=%s" % (
                 account.get("adapter_status", "UNKNOWN"),
                 _seconds_text(account.get("heartbeat_age_seconds")),
                 account.get("adapter_mode") or "UNKNOWN",
                 account.get("profile_status", "UNKNOWN"),
-                "是" if account.get("local_halt") else "否",
+                account.get("protection_level") or ("RISK_REDUCING_ONLY" if account.get("local_halt") else "READY"),
+                "是" if account.get("risk_reducing_allowed") else "否",
             ))
             print("      队列：命令=%d，ACK=%d，事件=%d，控制=%d，死信=%d" % (
                 int(depths.get("commands", 0) or 0),
@@ -727,7 +769,15 @@ def print_status_human(config_path, probe, issues):
     else:
         health = (probe.get("response") or {}).get("data") or {}
         protection = health.get("trade_protection") or {}
-        if health.get("mode") == "OBSERVE_ONLY" and (health.get("halted") or protection.get("active")):
+        protection_level = health.get("protection_level") or "READY"
+        risk_reducing_allowed = protection.get("risk_reducing_allowed") is True
+        if protection_level == "PAUSE_NEW_OPEN" and risk_reducing_allowed:
+            print("Worker和查询链路正常；已暂停开仓，严格减仓和撤单仍可用。")
+        elif protection_level == "RISK_REDUCING_ONLY" and risk_reducing_allowed:
+            print("Worker和查询链路正常；仅允许严格减仓和撤单。")
+        elif protection_level in {"PAUSE_NEW_OPEN", "RISK_REDUCING_ONLY"}:
+            print("Worker和查询链路正常；风险增加型交易受保护，严格减仓仍需满足当前门禁。")
+        elif health.get("mode") == "OBSERVE_ONLY" and (health.get("halted") or protection.get("active")):
             print("Worker和查询链路正常；新的交易提交受保护。")
         else:
             print("Worker和所有启用账户的PythonGO Adapter均已就绪。")
@@ -884,6 +934,7 @@ def build_parser():
     setup.add_argument("--root", required=True)
     setup.add_argument("--discover-existing", action="store_true", help="优先复用上次保存或旧安装包中的runtime")
     setup.add_argument("--legacy-root", help="旧安装包中可能存在的runtime目录")
+    setup.add_argument("--risk-preset", choices=sorted(RISK_PRESETS), help="仅新runtime使用；省略时交互选择")
     sub.add_parser("start", help="交互选择模式并在当前窗口启动Worker")
     sub.add_parser("status", help="检查实时状态，异常时自动运行doctor")
     shortcuts = sub.add_parser("create-shortcuts", help="创建桌面启动和状态脚本")
@@ -895,7 +946,10 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         if args.command == "setup":
-            run_setup(args.root, discover_existing=args.discover_existing, legacy_root=args.legacy_root)
+            run_setup(
+                args.root, discover_existing=args.discover_existing,
+                legacy_root=args.legacy_root, risk_preset=args.risk_preset,
+            )
             return 0
         if not args.config:
             raise BridgeError("CONFIG_REQUIRED", "该命令需要--config")

@@ -13,6 +13,50 @@ from .util import atomic_write_bytes, atomic_write_json
 DEFAULT_ALIAS = "main_futures"
 DEFAULT_ADAPTER = "pythongo_futures_01"
 DEFAULT_KEY_ID = "bridge-local-01"
+DEFAULT_RISK_PRESET = "SMALL_CONSERVATIVE"
+RISK_PRESETS = {
+    "SMALL_CONSERVATIVE": {
+        "max_order_volume": 1,
+        "max_order_notional": 100000.0,
+        "max_position_volume_per_instrument": 5,
+        "max_total_position_volume": 20,
+        "max_margin_per_order": 15000.0,
+        "max_total_margin": 50000.0,
+        "max_risk_ratio": 0.60,
+        "max_daily_orders": 20,
+        "max_daily_cancels": 50,
+        "max_daily_loss": 2000.0,
+        "max_order_notional_equity_pct": 0.50,
+        "max_margin_per_order_equity_pct": 0.05,
+        "max_total_margin_equity_pct": 0.30,
+        "max_daily_loss_equity_pct": 0.02,
+        "max_price_deviation_pct": 0.005,
+        "max_price_deviation_ticks": 5,
+        "trade_max_snapshot_age_seconds": 15,
+        "trade_max_quote_age_seconds": 3,
+    },
+    "MANUAL_BALANCED": {},
+    "LIMITED_AUTO": {
+        "max_order_volume": 2,
+        "max_order_notional": 200000.0,
+        "max_position_volume_per_instrument": 10,
+        "max_total_position_volume": 50,
+        "max_margin_per_order": 30000.0,
+        "max_total_margin": 150000.0,
+        "max_risk_ratio": 0.70,
+        "max_daily_orders": 100,
+        "max_daily_cancels": 200,
+        "max_daily_loss": 5000.0,
+        "max_order_notional_equity_pct": 0.50,
+        "max_margin_per_order_equity_pct": 0.05,
+        "max_total_margin_equity_pct": 0.40,
+        "max_daily_loss_equity_pct": 0.03,
+        "max_price_deviation_pct": 0.005,
+        "max_price_deviation_ticks": 5,
+        "trade_max_snapshot_age_seconds": 15,
+        "trade_max_quote_age_seconds": 3,
+    },
+}
 
 
 def _write_new(path, data, force=False):
@@ -26,8 +70,8 @@ def _secret_bytes(length=32):
     return secrets.token_bytes(length)
 
 
-def _risk_limits():
-    return {
+def _risk_limits(preset="MANUAL_BALANCED"):
+    limits = {
         "max_order_volume": 5,
         "max_order_notional": 500000.0,
         "max_position_volume_per_instrument": 20,
@@ -51,10 +95,25 @@ def _risk_limits():
         "max_auto_account_drawdown": 20000.0,
         "auto_heartbeat_max_age_seconds": 15,
         "auto_max_queue_depth": 20,
+        "max_order_notional_equity_pct": 1.0,
+        "max_margin_per_order_equity_pct": 0.10,
+        "max_total_margin_equity_pct": 0.50,
+        "max_daily_loss_equity_pct": 0.05,
+        "max_price_deviation_pct": 0.02,
+        "max_price_deviation_ticks": 20,
+        "trade_max_snapshot_age_seconds": 30,
+        "trade_max_quote_age_seconds": 5,
+        "trade_sync_timeout_ms": 1200,
+        "trade_sync_poll_ms": 50,
     }
+    try:
+        limits.update(RISK_PRESETS[preset])
+    except KeyError:
+        raise ValueError("unknown risk preset: %s" % preset)
+    return limits
 
 
-def _bridge_config(root):
+def _bridge_config(root, risk_preset="MANUAL_BALANCED"):
     return {
         "data_dir": "../data",
         "host": "127.0.0.1",
@@ -71,15 +130,15 @@ def _bridge_config(root):
             "investor_fingerprint": "REPLACE_AFTER_P0_BINDING",
             "instrument_allowlist": [],
             "close_policy": "TODAY_FIRST",
-            "risk_limits": _risk_limits(),
+            "risk_limits": _risk_limits(risk_preset),
         }],
     }
 
 
-def _adapter_config(root):
+def _adapter_config(root, risk_preset="MANUAL_BALANCED"):
     data_dir = os.path.abspath(os.path.join(root, "data"))
     ready = os.path.abspath(os.path.join(root, "pythongo_ready", DEFAULT_ADAPTER))
-    limits = _risk_limits()
+    limits = _risk_limits(risk_preset)
     adapter = {
         "account_alias": DEFAULT_ALIAS,
         "account_type": "FUTURES",
@@ -109,9 +168,16 @@ def _adapter_config(root):
         "adapter_max_auto_instrument_position_notional": limits["max_auto_instrument_position_notional"],
         "adapter_max_auto_account_drawdown": limits["max_auto_account_drawdown"],
         "max_snapshot_age_seconds": limits["max_snapshot_age_seconds"],
-        "max_quote_age_seconds": limits["max_quote_age_seconds"],
-        "adapter_max_price_deviation_pct": 0.02,
+        "max_quote_age_seconds": limits["trade_max_quote_age_seconds"],
+        "adapter_max_price_deviation_pct": limits["max_price_deviation_pct"],
+        "adapter_max_price_deviation_ticks": limits["max_price_deviation_ticks"],
+        "adapter_max_order_notional_equity_pct": limits["max_order_notional_equity_pct"],
+        "adapter_max_margin_per_order_equity_pct": limits["max_margin_per_order_equity_pct"],
+        "adapter_max_total_margin_equity_pct": limits["max_total_margin_equity_pct"],
+        "adapter_max_daily_loss": limits["max_daily_loss"],
+        "adapter_max_daily_loss_equity_pct": limits["max_daily_loss_equity_pct"],
         "allow_cancel_while_halted": True,
+        "allow_reduce_only_while_halted": True,
         "command_dispatch_mode": "TICK_DISPATCH",
         "command_scan_active_ms": 100,
         "command_scan_idle_ms": 200,
@@ -169,7 +235,7 @@ def _mcp_example(root):
     }
 
 
-def initialize(root=".", force=False):
+def initialize(root=".", force=False, risk_preset="MANUAL_BALANCED"):
     root = os.path.abspath(root)
     config_dir = os.path.join(root, "config")
     data_dir = os.path.join(root, "data")
@@ -202,8 +268,8 @@ def initialize(root=".", force=False):
 
     adapter_config_path = os.path.join(ready_dir, "pythongo_adapter.json")
     outputs = [
-        (os.path.join(config_dir, "bridge.json"), _bridge_config(root)),
-        (adapter_config_path, _adapter_config(root)),
+        (os.path.join(config_dir, "bridge.json"), _bridge_config(root, risk_preset)),
+        (adapter_config_path, _adapter_config(root, risk_preset)),
         (os.path.join(ready_dir, "pythongo_profile.json"), _profile()),
     ]
     for path, value in outputs:
@@ -246,8 +312,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Initialize a fail-closed WorkBuddy-PythonGO bridge")
     parser.add_argument("--root", default=".", help="deployment root")
     parser.add_argument("--force", action="store_true", help="replace generated config and secrets")
+    parser.add_argument("--risk-preset", choices=sorted(RISK_PRESETS), default="MANUAL_BALANCED")
     args = parser.parse_args(argv)
-    result = initialize(args.root, args.force)
+    result = initialize(args.root, args.force, args.risk_preset)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

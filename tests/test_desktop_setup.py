@@ -26,7 +26,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 class DesktopSetupTests(unittest.TestCase):
     def test_setup_accepts_plaintext_account_input(self):
         with tempfile.TemporaryDirectory() as root:
-            answers = iter(["", "n", "", "TEST-ACCOUNT-001", "", "n"])
+            answers = iter(["", "", "n", "", "TEST-ACCOUNT-001", "", "n"])
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 result = run_setup(
@@ -58,7 +58,7 @@ class DesktopSetupTests(unittest.TestCase):
 
     def test_shortcuts_pin_the_selected_python_executable(self):
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as shortcuts:
-            answers = iter(["", "n", "n", "", "n"])
+            answers = iter(["", "", "n", "n", "", "n"])
             with contextlib.redirect_stdout(io.StringIO()):
                 result = run_setup(
                     root,
@@ -127,6 +127,46 @@ class DesktopSetupTests(unittest.TestCase):
         self.assertIn("查询状态：可用", output.getvalue())
         self.assertIn("新的交易提交受保护", output.getvalue())
 
+    def test_status_explains_pause_new_open_without_calling_it_a_full_halt(self):
+        health = {
+            "worker": "READY",
+            "mode": "LIMITED_AUTO",
+            "halted": False,
+            "observation_ready": True,
+            "trade_ready": False,
+            "protection_level": "PAUSE_NEW_OPEN",
+            "trade_protection": {
+                "active": True,
+                "kind": "PAUSE_NEW_OPEN",
+                "reason": "temporary strategy health gate",
+                "queries_available": True,
+                "risk_reducing_allowed": True,
+            },
+            "accounts": [{
+                "account_alias": "main_futures",
+                "adapter_status": "READY",
+                "heartbeat_age_seconds": 1,
+                "adapter_mode": "LIMITED_AUTO",
+                "profile_status": "VALID",
+                "local_halt": False,
+                "protection_level": "PAUSE_NEW_OPEN",
+                "observation_ready": True,
+                "trade_ready": False,
+                "queue_depths": {},
+            }],
+            "unresolved_submit_unknown": 0,
+        }
+        probe = {"state": "RUNNING", "message": "", "response": {"ok": True, "data": health}}
+
+        issues = _status_issues(probe)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            print_status_human("bridge.json", probe, issues)
+
+        self.assertEqual(issues, [])
+        self.assertIn("已暂停开仓；严格减仓和撤单仍可用", output.getvalue())
+        self.assertNotIn("均已就绪", output.getvalue())
+
     def test_status_and_doctor_print_actionable_chinese_next_steps(self):
         stopped = {"state": "STOPPED", "message": "Worker未启动", "response": None}
         output = io.StringIO()
@@ -151,7 +191,7 @@ class DesktopSetupTests(unittest.TestCase):
     def test_setup_auto_migrates_tracking_fields_without_changing_profile(self):
         with tempfile.TemporaryDirectory() as root:
             pointer_path = os.path.join(root, "runtime.path")
-            answers = iter(["", "n", "n", "", "n"])
+            answers = iter(["", "", "n", "n", "", "n"])
             with contextlib.redirect_stdout(io.StringIO()):
                 initial = run_setup(
                     root, input_func=lambda _prompt: next(answers),

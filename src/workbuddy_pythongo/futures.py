@@ -45,7 +45,7 @@ def validate_trade_request(request):
         raise ValidationError("sizing.value must be a positive integer")
     _strict_object(
         normalized["price_policy"],
-        {"type", "limit_price", "max_deviation_pct"},
+        {"type", "limit_price", "max_deviation_pct", "max_deviation_ticks"},
         {"type", "limit_price"},
         "price_policy",
     )
@@ -58,6 +58,12 @@ def validate_trade_request(request):
     if isinstance(deviation, bool) or not isinstance(deviation, (int, float)) or not 0 <= float(deviation) <= 1:
         raise ValidationError("max_deviation_pct must be between 0 and 1")
     normalized["price_policy"]["max_deviation_pct"] = float(deviation)
+    deviation_ticks = normalized["price_policy"].get("max_deviation_ticks")
+    if (
+        deviation_ticks is not None and
+        (isinstance(deviation_ticks, bool) or not isinstance(deviation_ticks, int) or deviation_ticks <= 0)
+    ):
+        raise ValidationError("max_deviation_ticks must be a positive integer")
     if normalized.get("close_policy") is not None and normalized["close_policy"] not in {"TODAY_FIRST", "YESTERDAY_FIRST", "EXPLICIT_ONLY"}:
         raise ValidationError("invalid close_policy")
     if normalized["hedge_flag"] != "SPECULATION":
@@ -102,14 +108,15 @@ def build_preview(request, account_config, account_snapshot, position, quote, ac
         reasons.append("POSITION_SNAPSHOT_MISSING")
     if not quote:
         reasons.append("QUOTE_MISSING")
-    if account_snapshot and age_seconds(account_snapshot["captured_at"]) > limits.max_snapshot_age_seconds:
+    if account_snapshot and age_seconds(account_snapshot["captured_at"]) > limits.trade_max_snapshot_age_seconds:
         reasons.append("ACCOUNT_SNAPSHOT_STALE")
-    if position and age_seconds(position["captured_at"]) > limits.max_snapshot_age_seconds:
+    if position and age_seconds(position["captured_at"]) > limits.trade_max_snapshot_age_seconds:
         reasons.append("POSITION_STALE")
-    if quote and age_seconds(quote["captured_at"]) > limits.max_quote_age_seconds:
+    if quote and age_seconds(quote["captured_at"]) > limits.trade_max_quote_age_seconds:
         reasons.append("QUOTE_STALE")
     price = float(request["price_policy"]["limit_price"])
     volume = int(request["sizing"]["value"])
+    risk_increasing = request["action"].startswith("OPEN_")
     if volume > limits.max_order_volume:
         reasons.append("MAX_ORDER_VOLUME")
     quote_payload = (quote or {}).get("payload", {})
@@ -129,29 +136,61 @@ def build_preview(request, account_config, account_snapshot, position, quote, ac
     elif not float(lower) <= price <= float(upper):
         reasons.append("PRICE_OUTSIDE_DAILY_LIMIT")
     last_price = quote_payload.get("last_price")
-    max_deviation = request["price_policy"]["max_deviation_pct"]
+    max_deviation = min(
+        request["price_policy"]["max_deviation_pct"],
+        limits.max_price_deviation_pct,
+    )
+    requested_ticks = request["price_policy"].get("max_deviation_ticks")
+    max_deviation_ticks = min(requested_ticks, limits.max_price_deviation_ticks) if requested_ticks else limits.max_price_deviation_ticks
+    percent_deviation_ok = bool(
+        isinstance(last_price, (int, float)) and last_price > 0 and
+        abs(price - float(last_price)) / float(last_price) <= max_deviation
+    )
+    tick_deviation_ok = bool(
+        isinstance(last_price, (int, float)) and last_price > 0 and
+        isinstance(tick, (int, float)) and tick > 0 and
+        abs(price - float(last_price)) <= float(tick) * max_deviation_ticks + 1e-8
+    )
     if not isinstance(last_price, (int, float)) or last_price <= 0:
         reasons.append("REFERENCE_PRICE_MISSING")
-    elif abs(price - float(last_price)) / float(last_price) > max_deviation:
+    elif not percent_deviation_ok or not tick_deviation_ok:
         reasons.append("PRICE_DEVIATION_EXCEEDED")
     notional = price * volume * float(multiplier)
-    if notional > limits.max_order_notional:
-        reasons.append("MAX_ORDER_NOTIONAL")
     account_payload = (account_snapshot or {}).get("payload", {})
+    equity = account_payload.get("dynamic_rights") or account_payload.get("balance")
+    equity_valid = bool(
+        isinstance(equity, (int, float)) and not isinstance(equity, bool) and
+        math.isfinite(float(equity)) and float(equity) > 0
+    )
+    effective_limits = None
+    if equity_valid:
+        equity = float(equity)
+        effective_limits = {
+            "max_order_notional": min(limits.max_order_notional, equity * limits.max_order_notional_equity_pct),
+            "max_margin_per_order": min(limits.max_margin_per_order, equity * limits.max_margin_per_order_equity_pct),
+            "max_total_margin": min(limits.max_total_margin, equity * limits.max_total_margin_equity_pct),
+            "max_daily_loss": min(limits.max_daily_loss, equity * limits.max_daily_loss_equity_pct),
+        }
+    elif risk_increasing:
+        reasons.append("ACCOUNT_EQUITY_MISSING")
+    if risk_increasing and effective_limits and notional > effective_limits["max_order_notional"]:
+        reasons.append("MAX_ORDER_NOTIONAL")
     risk_ratio = account_payload.get("risk")
-    if not isinstance(risk_ratio, (int, float)) or isinstance(risk_ratio, bool):
-        reasons.append("RISK_RATIO_MISSING")
-    elif risk_ratio > limits.max_risk_ratio:
-        reasons.append("MAX_RISK_RATIO")
+    if risk_increasing:
+        if not isinstance(risk_ratio, (int, float)) or isinstance(risk_ratio, bool):
+            reasons.append("RISK_RATIO_MISSING")
+        elif risk_ratio > limits.max_risk_ratio:
+            reasons.append("MAX_RISK_RATIO")
     current_margin = account_payload.get("margin")
-    if not isinstance(current_margin, (int, float)) or isinstance(current_margin, bool):
-        reasons.append("MARGIN_DATA_MISSING")
-    elif current_margin > limits.max_total_margin:
-        reasons.append("MAX_TOTAL_MARGIN")
+    if risk_increasing:
+        if not isinstance(current_margin, (int, float)) or isinstance(current_margin, bool):
+            reasons.append("MARGIN_DATA_MISSING")
+        elif effective_limits and current_margin > effective_limits["max_total_margin"]:
+            reasons.append("MAX_TOTAL_MARGIN")
     margin_ratio = quote_payload.get("margin_ratio")
     margin_per_lot = quote_payload.get("margin_per_lot")
     margin_estimate = None
-    if request["action"].startswith("OPEN_"):
+    if risk_increasing:
         if (
             isinstance(margin_per_lot, (int, float)) and
             not isinstance(margin_per_lot, bool) and
@@ -167,23 +206,24 @@ def build_preview(request, account_config, account_snapshot, position, quote, ac
         else:
             reasons.append("MARGIN_RATIO_MISSING")
         if margin_estimate is not None:
-            if margin_estimate > limits.max_margin_per_order:
+            if effective_limits and margin_estimate > effective_limits["max_margin_per_order"]:
                 reasons.append("MAX_MARGIN_PER_ORDER")
             available = account_payload.get("available")
             if not isinstance(available, (int, float)) or available < margin_estimate:
                 reasons.append("AVAILABLE_FUNDS_INSUFFICIENT")
-            if isinstance(current_margin, (int, float)) and current_margin + margin_estimate > limits.max_total_margin:
+            if effective_limits and isinstance(current_margin, (int, float)) and current_margin + margin_estimate > effective_limits["max_total_margin"]:
                 reasons.append("MAX_TOTAL_MARGIN")
-    if daily_counts.get("orders", 0) >= limits.max_daily_orders:
-        reasons.append("MAX_DAILY_ORDERS")
-    if daily_counts.get("cancels", 0) >= limits.max_daily_cancels:
-        reasons.append("MAX_DAILY_CANCELS")
     pnl = float(account_payload.get("close_profit") or 0) + float(account_payload.get("position_profit") or 0)
-    if pnl < -limits.max_daily_loss:
-        reasons.append("MAX_DAILY_LOSS")
+    if risk_increasing:
+        if daily_counts.get("orders", 0) >= limits.max_daily_orders:
+            reasons.append("MAX_DAILY_ORDERS")
+        if daily_counts.get("cancels", 0) >= limits.max_daily_cancels:
+            reasons.append("MAX_DAILY_CANCELS")
+        if effective_limits and pnl < -effective_limits["max_daily_loss"]:
+            reasons.append("MAX_DAILY_LOSS")
     current_total = int((position or {}).get("payload", {}).get("position") or 0)
     all_position_volume = int(daily_counts.get("total_position_volume") or current_total)
-    if request["action"].startswith("OPEN_"):
+    if risk_increasing:
         if current_total + volume > limits.max_position_volume_per_instrument:
             reasons.append("MAX_INSTRUMENT_POSITION")
         if all_position_volume + volume > limits.max_total_position_volume:
@@ -221,6 +261,9 @@ def build_preview(request, account_config, account_snapshot, position, quote, ac
         "frozen_margin": account_payload.get("frozen_margin"),
         "risk": account_payload.get("risk"),
         "pnl": pnl,
+        "account_equity": equity if equity_valid else None,
+        "effective_risk_limits": effective_limits,
+        "risk_increasing": risk_increasing,
         "target_position": position_risk,
         "quote_guard": {
             "price_tick": tick,
@@ -238,7 +281,11 @@ def build_preview(request, account_config, account_snapshot, position, quote, ac
             "margin_ratio_reference_error": quote_payload.get("margin_ratio_reference_error"),
             "tick_aligned": bool(isinstance(tick, (int, float)) and tick > 0 and _tick_aligned(price, tick)),
             "within_daily_limit": bool(isinstance(lower, (int, float)) and isinstance(upper, (int, float)) and lower <= price <= upper),
-            "within_max_deviation": bool(isinstance(last_price, (int, float)) and last_price > 0 and abs(price - float(last_price)) / float(last_price) <= max_deviation),
+            "max_deviation_pct": max_deviation,
+            "max_deviation_ticks": max_deviation_ticks,
+            "within_percent_deviation": percent_deviation_ok,
+            "within_tick_deviation": tick_deviation_ok,
+            "within_max_deviation": percent_deviation_ok and tick_deviation_ok,
         },
         "active_order_ids": sorted(str(item.get("pythongo_order_id")) for item in active_orders),
         "daily_counts": daily_counts,

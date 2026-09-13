@@ -36,7 +36,20 @@ AUTO_RISK_DEFAULTS = {
     "auto_heartbeat_max_age_seconds": 15,
     "auto_max_queue_depth": 20,
 }
-RISK_FIELDS = BASE_RISK_FIELDS | set(AUTO_RISK_DEFAULTS)
+ADAPTIVE_RISK_DEFAULTS = {
+    "max_order_notional_equity_pct": 1.0,
+    "max_margin_per_order_equity_pct": 0.10,
+    "max_total_margin_equity_pct": 0.50,
+    "max_daily_loss_equity_pct": 0.05,
+    "max_price_deviation_pct": 0.02,
+    "max_price_deviation_ticks": 20,
+    "trade_max_snapshot_age_seconds": 30,
+    "trade_max_quote_age_seconds": 5,
+    "trade_sync_timeout_ms": 1200,
+    "trade_sync_poll_ms": 50,
+}
+OPTIONAL_RISK_DEFAULTS = dict(AUTO_RISK_DEFAULTS, **ADAPTIVE_RISK_DEFAULTS)
+RISK_FIELDS = BASE_RISK_FIELDS | set(OPTIONAL_RISK_DEFAULTS)
 INTEGER_RISK_FIELDS = {
     "max_order_volume", "max_position_volume_per_instrument",
     "max_total_position_volume", "max_daily_orders", "max_daily_cancels",
@@ -45,6 +58,13 @@ INTEGER_RISK_FIELDS = {
     "max_auto_authorization_minutes", "max_auto_orders",
     "min_auto_order_interval_seconds", "max_auto_concurrent_orders",
     "auto_heartbeat_max_age_seconds", "auto_max_queue_depth",
+    "max_price_deviation_ticks", "trade_max_snapshot_age_seconds",
+    "trade_max_quote_age_seconds", "trade_sync_timeout_ms", "trade_sync_poll_ms",
+}
+PERCENT_RISK_FIELDS = {
+    "max_order_notional_equity_pct", "max_margin_per_order_equity_pct",
+    "max_total_margin_equity_pct", "max_daily_loss_equity_pct",
+    "max_price_deviation_pct",
 }
 CLOSE_POLICIES = {"TODAY_FIRST", "YESTERDAY_FIRST", "EXPLICIT_ONLY"}
 
@@ -74,6 +94,16 @@ class RiskLimits:
     max_auto_account_drawdown: float
     auto_heartbeat_max_age_seconds: int
     auto_max_queue_depth: int
+    max_order_notional_equity_pct: float
+    max_margin_per_order_equity_pct: float
+    max_total_margin_equity_pct: float
+    max_daily_loss_equity_pct: float
+    max_price_deviation_pct: float
+    max_price_deviation_ticks: int
+    trade_max_snapshot_age_seconds: int
+    trade_max_quote_age_seconds: int
+    trade_sync_timeout_ms: int
+    trade_sync_poll_ms: int
 
 
 @dataclass(frozen=True)
@@ -143,16 +173,18 @@ def _risk_limits(raw, alias):
     if not isinstance(raw, dict) or BASE_RISK_FIELDS - set(raw) or set(raw) - RISK_FIELDS:
         missing = sorted(BASE_RISK_FIELDS - set(raw or {})) if isinstance(raw, dict) else sorted(BASE_RISK_FIELDS)
         unknown = sorted(set(raw or {}) - RISK_FIELDS) if isinstance(raw, dict) else []
-        raise BridgeError("CONFIG_ERROR", "risk_limits must contain all required fields and only supported P1 fields", {"account_alias": alias, "missing": missing, "unknown": unknown})
+        raise BridgeError("CONFIG_ERROR", "risk_limits must contain all required fields and only supported risk fields", {"account_alias": alias, "missing": missing, "unknown": unknown})
     values = {}
     for name in sorted(RISK_FIELDS):
         full = "%s.risk_limits.%s" % (alias, name)
-        value = raw[name] if name in raw else AUTO_RISK_DEFAULTS[name]
+        value = raw[name] if name in raw else OPTIONAL_RISK_DEFAULTS[name]
         if name in INTEGER_RISK_FIELDS:
             if name == "max_auto_authorization_minutes":
                 maximum = 720
             elif name == "auto_heartbeat_max_age_seconds":
                 maximum = 60
+            elif name.endswith("_ms"):
+                maximum = 10000
             elif name.endswith("_seconds"):
                 maximum = 86400
             elif name == "auto_max_queue_depth":
@@ -161,10 +193,16 @@ def _risk_limits(raw, alias):
                 maximum = 2147483647
             minimum = 5 if name == "auto_heartbeat_max_age_seconds" else 1
             values[name] = _integer(value, full, minimum, maximum)
+        elif name in PERCENT_RISK_FIELDS:
+            values[name] = _number(value, full, 0.000001, 1.0)
         elif name == "max_risk_ratio":
             values[name] = _number(value, full, 0.000001, 100.0)
         else:
             values[name] = _number(value, full)
+    if values["trade_sync_poll_ms"] > values["trade_sync_timeout_ms"]:
+        raise BridgeError(
+            "CONFIG_ERROR", "%s.risk_limits.trade_sync_poll_ms must not exceed trade_sync_timeout_ms" % alias,
+        )
     return RiskLimits(**values)
 
 

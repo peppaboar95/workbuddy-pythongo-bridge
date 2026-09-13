@@ -22,13 +22,15 @@ WorkBuddy/MCP 与无限易 PythonGO v2 之间的本机、失败关闭型期货�
 
 0.3.8 包含 0.3.7 的 MCP 交易热路径优化：交易意图可靠入队后立即返回异步状态；Worker 与 Adapter 使用 100–200ms 自适应扫描；Adapter 启动时预订阅账户白名单合约；交易同步明确禁止夹带 K 线请求。本版本同时修复英文区域设置 Windows 无法生成中文桌面快捷方式的问题。
 
+当前开发分支尚未发布的改造包括：恢复崩溃遗留的 `.processing` 命令、只由目标合约 Tick 触发 `TICK_DISPATCH`、熔断或自动暂停时保留严格减仓和撤单、陈旧交易快照拒绝前主动同步、绝对值与权益比例双上限、百分比与 Tick 双价格偏离，以及三套首次配置风控预设。
+
 ## 安全模型
 
 - `preview_trade` 与 `submit_trade_intent` 两阶段提交；
 - 提交时重新执行完整硬风控并比较决策指纹；
 - Worker 与 PythonGO Adapter 双端检查账号、模式、签名、时效和授权；
 - `PRE_SUBMIT`、`SUBMIT_CALLED` 或未知结果不会自动重发；
-- 熔断只能由本机 Console 解除，解除后强制回到 `OBSERVE_ONLY`；
+- 熔断只能由本机 Console 解除，解除后强制回到 `OBSERVE_ONLY`；熔断期间只保留撤单和可由新鲜目标持仓严格证明的减仓；
 - `LIMITED_AUTO` 需要限时、限合约、限动作、限策略版本和限额度的结构化许可；
 - 密钥、真实投资者账号、数据库、队列、日志和签名 Profile 不进入源码或 Release。
 
@@ -55,7 +57,7 @@ Worker ── SQLite / 签名文件队列 ── PythonGO Adapter
 
 Worker 负责状态、预览、风控、许可、审计和队列；内嵌 Adapter 负责账户与 Profile 复核、行情和账户快照、最终风控以及报撤单调用。两侧任一状态不可信时都应拒绝新开仓。
 
-当前源码的低延迟路径使用 100–200ms 自适应队列扫描；Adapter 启动时预订阅账户 `instrument_allowlist` 中的精确合约。交易前同步应使用 `request_sync(..., purpose="TRADE")`，只同步资金、持仓和行情，不把 K 线查询放进报单热路径。`submit_trade_intent` 只等待可靠落库和入队，随后立即返回 `async_status`；柜台进度通过 `get_trade_intent` 异步读取。
+当前源码的低延迟路径使用 100–200ms 自适应队列扫描；Adapter 启动时预订阅账户 `instrument_allowlist` 中的精确合约。`TICK_DISPATCH` 只在命令目标合约的 Tick 到达时执行；崩溃遗留的 `.json.processing-*` 会在重启后恢复并继续走验签、执行日记和幂等处理。交易前同步应使用 `request_sync(..., purpose="TRADE")`，只同步资金、持仓和行情，不把 K 线查询放进报单热路径；Preview 遇到陈旧交易快照时会先主动同步一次。`submit_trade_intent` 只等待可靠落库和入队，随后立即返回 `async_status`；柜台进度通过 `get_trade_intent` 异步读取。
 
 ## 安装
 

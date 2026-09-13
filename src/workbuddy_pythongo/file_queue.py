@@ -91,7 +91,8 @@ class FileQueue:
                 )
             else:
                 result[folder] = sum(
-                    name.endswith(".json") and os.path.isfile(os.path.join(directory, name))
+                    (name.endswith(".json") or ".json.processing-" in name)
+                    and os.path.isfile(os.path.join(directory, name))
                     for name in os.listdir(directory)
                 )
         return result

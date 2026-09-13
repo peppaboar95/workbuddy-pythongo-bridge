@@ -106,6 +106,15 @@ PERFORMANCE_CONFIG_DEFAULTS = {
     "command_scan_idle_ms": 200,
     "pre_subscribe_instruments": [],
 }
+ADAPTIVE_RISK_CONFIG_DEFAULTS = {
+    "adapter_max_order_notional_equity_pct": 1.0,
+    "adapter_max_margin_per_order_equity_pct": 0.10,
+    "adapter_max_total_margin_equity_pct": 0.50,
+    "adapter_max_daily_loss": 10000.0,
+    "adapter_max_daily_loss_equity_pct": 0.05,
+    "adapter_max_price_deviation_ticks": 20,
+    "allow_reduce_only_while_halted": True,
+}
 MARGIN_REFERENCE_DEFAULTS = {
     "margin_reference_file": "",
     "margin_reference_schema_version": 2,
@@ -126,7 +135,8 @@ MARGIN_POLICY_TRACKING_FIELDS = {
 }
 CONFIG_FIELDS = (
     BASE_CONFIG_FIELDS | set(AUTO_CONFIG_DEFAULTS) |
-    set(PERFORMANCE_CONFIG_DEFAULTS) | set(MARGIN_REFERENCE_DEFAULTS) |
+    set(PERFORMANCE_CONFIG_DEFAULTS) | set(ADAPTIVE_RISK_CONFIG_DEFAULTS) |
+    set(MARGIN_REFERENCE_DEFAULTS) |
     MARGIN_POLICY_TRACKING_FIELDS
 )
 LEGACY_MARGIN_REFERENCE_FIELDS = {"margin_reference_max_age_hours"}
@@ -350,7 +360,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             set(config) - (CONFIG_FIELDS | LEGACY_MARGIN_REFERENCE_FIELDS)
         ):
             raise RuntimeError("adapter config fields do not match the P1 schema")
-        for defaults in (AUTO_CONFIG_DEFAULTS, PERFORMANCE_CONFIG_DEFAULTS):
+        for defaults in (AUTO_CONFIG_DEFAULTS, PERFORMANCE_CONFIG_DEFAULTS, ADAPTIVE_RISK_CONFIG_DEFAULTS):
             for name, value in defaults.items():
                 config.setdefault(name, list(value) if isinstance(value, list) else value)
         missing_margin_fields = (set(MARGIN_REFERENCE_DEFAULTS) | MARGIN_POLICY_TRACKING_FIELDS) - set(config)
@@ -392,11 +402,27 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
         for name in ("adapter_max_auto_session_notional", "adapter_max_auto_instrument_position_notional", "adapter_max_auto_account_drawdown"):
             if isinstance(config[name], bool) or not isinstance(config[name], (int, float)) or not math.isfinite(float(config[name])) or config[name] <= 0:
                 raise RuntimeError("invalid numeric config: " + name)
+        for name in (
+            "adapter_max_order_notional_equity_pct", "adapter_max_margin_per_order_equity_pct",
+            "adapter_max_total_margin_equity_pct", "adapter_max_daily_loss_equity_pct",
+        ):
+            if isinstance(config[name], bool) or not isinstance(config[name], (int, float)) or not 0 < float(config[name]) <= 1:
+                raise RuntimeError("invalid equity percentage config: " + name)
+        if (
+            isinstance(config["adapter_max_daily_loss"], bool) or
+            not isinstance(config["adapter_max_daily_loss"], (int, float)) or
+            not math.isfinite(float(config["adapter_max_daily_loss"])) or config["adapter_max_daily_loss"] <= 0
+        ):
+            raise RuntimeError("invalid numeric config: adapter_max_daily_loss")
+        if isinstance(config["adapter_max_price_deviation_ticks"], bool) or not isinstance(config["adapter_max_price_deviation_ticks"], int) or config["adapter_max_price_deviation_ticks"] <= 0:
+            raise RuntimeError("invalid integer config: adapter_max_price_deviation_ticks")
         for name in ("adapter_max_auto_orders", "adapter_min_auto_order_interval_seconds", "adapter_max_auto_concurrent_orders"):
             if isinstance(config[name], bool) or not isinstance(config[name], int) or config[name] <= 0:
                 raise RuntimeError("invalid integer config: " + name)
         if not isinstance(config["allow_cancel_while_halted"], bool):
             raise RuntimeError("allow_cancel_while_halted must be a boolean")
+        if not isinstance(config["allow_reduce_only_while_halted"], bool):
+            raise RuntimeError("allow_reduce_only_while_halted must be a boolean")
         if not isinstance(config["margin_reference_file"], str) or not os.path.isabs(config["margin_reference_file"]):
             raise RuntimeError("margin_reference_file must be an absolute path")
         if not isinstance(config["margin_reference_require_signature"], bool):
@@ -668,8 +694,12 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
         return None
 
     def _validate_auto_authorization(self, payload, command):
-        if payload.get("authorization_type") != "LIMITED_AUTO_PERMIT":
+        authorization_type = payload.get("authorization_type")
+        risk_reducing = self._is_strict_reduce_command(command)
+        if authorization_type not in ("LIMITED_AUTO_PERMIT", "PAUSE_NEW_OPEN"):
             raise RuntimeError("limited-auto authorization type mismatch")
+        if authorization_type == "PAUSE_NEW_OPEN" and command.get("semantic_action", "").startswith("OPEN_"):
+            raise RuntimeError("limited-auto is paused for new open orders")
         if not isinstance(command, dict) or command.get("execution_mode") != "LIMITED_AUTO":
             raise RuntimeError("limited-auto command is missing")
         authorization = payload.get("auto_permit")
@@ -691,7 +721,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             policy.get("generation") != command_permit.get("generation")
         ):
             raise RuntimeError("limited-auto permit generation mismatch")
-        if self._active_auto_pause(command) is not None:
+        if self._active_auto_pause(command) is not None and command.get("semantic_action", "").startswith("OPEN_"):
             raise RuntimeError("limited-auto is locally paused")
         if policy.get("account_alias") != self._config["account_alias"] or policy.get("account_type") != "FUTURES":
             raise RuntimeError("limited-auto policy account mismatch")
@@ -729,15 +759,16 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             raise RuntimeError("limited-auto order volume exceeded")
         if isinstance(notional, bool) or not isinstance(notional, (int, float)) or notional <= 0 or notional > float(policy.get("max_order_notional", 0)):
             raise RuntimeError("limited-auto order notional exceeded")
-        usage = self._auto_journal_usage(command_permit["permit_id"])
-        if usage["order_count"] + 1 > int(policy.get("max_orders", 0)):
-            raise RuntimeError("limited-auto order count exceeded")
-        if usage["notional"] + float(notional) > float(policy.get("max_session_notional", 0)):
-            raise RuntimeError("limited-auto session notional exceeded")
-        if usage["last_created_at"]:
-            elapsed = (_now() - _parse_time(usage["last_created_at"])).total_seconds()
-            if elapsed < int(policy.get("min_order_interval_seconds", 0)):
-                raise RuntimeError("limited-auto order rate exceeded")
+        if not risk_reducing:
+            usage = self._auto_journal_usage(command_permit["permit_id"])
+            if usage["order_count"] + 1 > int(policy.get("max_orders", 0)):
+                raise RuntimeError("limited-auto order count exceeded")
+            if usage["notional"] + float(notional) > float(policy.get("max_session_notional", 0)):
+                raise RuntimeError("limited-auto session notional exceeded")
+            if usage["last_created_at"]:
+                elapsed = (_now() - _parse_time(usage["last_created_at"])).total_seconds()
+                if elapsed < int(policy.get("min_order_interval_seconds", 0)):
+                    raise RuntimeError("limited-auto order rate exceeded")
         return policy
 
     def _local_authorized(self, mode, command=None):
@@ -760,7 +791,10 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             if not valid:
                 return None
             if mode == "LIMITED_AUTO":
-                return {"auto_policy": self._validate_auto_authorization(payload, command)}
+                return {
+                    "auto_policy": self._validate_auto_authorization(payload, command),
+                    "authorization_type": payload.get("authorization_type"),
+                }
             return {}
         except Exception:
             return None
@@ -1409,6 +1443,20 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
         if active >= int(policy.get("max_concurrent_orders", 0)):
             raise RuntimeError("limited-auto concurrent-order limit exceeded at final check")
 
+    @staticmethod
+    def _is_strict_reduce_command(command):
+        action = command.get("action")
+        expected = {
+            "CLOSE_TODAY_LONG": ("SELL", "CLOSE_TODAY"),
+            "CLOSE_TODAY_SHORT": ("BUY", "CLOSE_TODAY"),
+            "CLOSE_YESTERDAY_LONG": ("SELL", "CLOSE_YESTERDAY"),
+            "CLOSE_YESTERDAY_SHORT": ("BUY", "CLOSE_YESTERDAY"),
+        }.get(action)
+        return bool(
+            expected and command.get("semantic_action", "").startswith("CLOSE_") and
+            (command.get("direction"), command.get("offset")) == expected
+        )
+
     def _final_risk(self, command):
         self._profile_status, self._profile = self._load_profile()
         if not isinstance(command, dict) or set(command) != COMMAND_FIELDS:
@@ -1419,11 +1467,18 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             raise RuntimeError("mode mismatch")
         if command["hedge_flag"] != "SPECULATION":
             raise RuntimeError("unsupported semantic hedge flag")
-        if self._local_halted():
+        risk_reducing = self._is_strict_reduce_command(command)
+        halted = self._local_halted()
+        reduce_only_override = bool(
+            halted and risk_reducing and self._config["allow_reduce_only_while_halted"]
+        )
+        if halted and not reduce_only_override:
             raise RuntimeError("adapter is locally halted")
-        authorization = self._local_authorized(command["execution_mode"], command)
-        if authorization is None:
-            raise RuntimeError("execution mode is not locally authorized")
+        authorization = {}
+        if not reduce_only_override:
+            authorization = self._local_authorized(command["execution_mode"], command)
+            if authorization is None:
+                raise RuntimeError("execution mode is not locally authorized")
         volume = command["volume"]
         price = command["limit_price"]
         if isinstance(volume, bool) or not isinstance(volume, int) or volume <= 0 or volume > self._config["adapter_max_order_volume"]:
@@ -1438,19 +1493,44 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             raise RuntimeError("price is not tick aligned")
         if not quote["lower_limit_price"] <= price <= quote["upper_limit_price"]:
             raise RuntimeError("price is outside daily limits")
-        if abs(price - quote["last_price"]) / quote["last_price"] > self._config["adapter_max_price_deviation_pct"]:
+        if (
+            abs(price - quote["last_price"]) / quote["last_price"] > self._config["adapter_max_price_deviation_pct"] or
+            abs(price - quote["last_price"]) > quote["price_tick"] * self._config["adapter_max_price_deviation_ticks"] + 1e-8
+        ):
             raise RuntimeError("price deviation exceeded")
         notional = price * volume * quote["volume_multiple"]
         if abs(float(command["order_notional"]) - float(notional)) > 1e-6:
             raise RuntimeError("signed order notional does not match the fresh contract multiplier")
-        if notional > self._config["adapter_max_order_notional"]:
-            raise RuntimeError("adapter notional limit exceeded")
         account = self._account()
-        if not isinstance(account.get("risk"), (int, float)) or account["risk"] > self._config["adapter_max_risk_ratio"]:
-            raise RuntimeError("account risk ratio unavailable or excessive")
-        if not isinstance(account.get("margin"), (int, float)) or account["margin"] > self._config["adapter_max_total_margin"]:
-            raise RuntimeError("account margin unavailable or excessive")
         if command["offset"] == "OPEN":
+            equity = account.get("dynamic_rights") or account.get("balance")
+            if isinstance(equity, bool) or not isinstance(equity, (int, float)) or not math.isfinite(float(equity)) or equity <= 0:
+                raise RuntimeError("account equity unavailable")
+            effective_notional = min(
+                self._config["adapter_max_order_notional"],
+                float(equity) * self._config["adapter_max_order_notional_equity_pct"],
+            )
+            effective_order_margin = min(
+                self._config["adapter_max_margin_per_order"],
+                float(equity) * self._config["adapter_max_margin_per_order_equity_pct"],
+            )
+            effective_total_margin = min(
+                self._config["adapter_max_total_margin"],
+                float(equity) * self._config["adapter_max_total_margin_equity_pct"],
+            )
+            effective_daily_loss = min(
+                self._config["adapter_max_daily_loss"],
+                float(equity) * self._config["adapter_max_daily_loss_equity_pct"],
+            )
+            if notional > effective_notional:
+                raise RuntimeError("adapter notional limit exceeded")
+            if not isinstance(account.get("risk"), (int, float)) or account["risk"] > self._config["adapter_max_risk_ratio"]:
+                raise RuntimeError("account risk ratio unavailable or excessive")
+            if not isinstance(account.get("margin"), (int, float)) or account["margin"] > effective_total_margin:
+                raise RuntimeError("account margin unavailable or excessive")
+            pnl = float(account.get("close_profit") or 0) + float(account.get("position_profit") or 0)
+            if pnl < -effective_daily_loss:
+                raise RuntimeError("daily loss limit exceeded")
             margin_per_lot = quote.get("margin_per_lot")
             ratio = quote.get("margin_ratio")
             if isinstance(margin_per_lot, (int, float)) and not isinstance(margin_per_lot, bool) and math.isfinite(float(margin_per_lot)) and margin_per_lot > 0:
@@ -1459,7 +1539,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
                 margin = notional * ratio
             else:
                 raise RuntimeError("margin data unavailable")
-            if margin > self._config["adapter_max_margin_per_order"] or account["margin"] + margin > self._config["adapter_max_total_margin"]:
+            if margin > effective_order_margin or account["margin"] + margin > effective_total_margin:
                 raise RuntimeError("margin limit exceeded")
             if not isinstance(account.get("available"), (int, float)) or account["available"] < margin:
                 raise RuntimeError("available funds insufficient")
@@ -1472,7 +1552,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             available = side["td_close_available"] if command["offset"] == "CLOSE_TODAY" else side["yd_close_available"]
             if volume > available:
                 raise RuntimeError("close volume exceeds fresh available position")
-        if command["execution_mode"] == "LIMITED_AUTO":
+        if command["execution_mode"] == "LIMITED_AUTO" and not risk_reducing and not reduce_only_override:
             policy = authorization.get("auto_policy")
             if not isinstance(policy, dict):
                 raise RuntimeError("limited-auto policy is unavailable at final check")
@@ -1593,6 +1673,11 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
     def _request_sync(self, command, message_id):
         scopes = command.get("scopes") or []
         instruments = command.get("instruments") or []
+        purpose = command.get("purpose", "GENERAL")
+        if purpose not in ("GENERAL", "TRADE"):
+            raise RuntimeError("invalid sync purpose")
+        if purpose == "TRADE" and "KLINE" in scopes:
+            raise RuntimeError("K-line is forbidden in the trade hot path")
         warnings = []
         if "ACCOUNT" in scopes:
             self._emit_account()
@@ -1647,6 +1732,33 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             return None
         return claimed
 
+    @staticmethod
+    def _is_queue_file(name):
+        return name.endswith(".json") or ".json.processing-" in name
+
+    def _pending_target(self, path):
+        message = _load_json(path)
+        command = message.get("payload") or {}
+        exchange = command.get("exchange")
+        instrument_id = command.get("instrument_id")
+        if not isinstance(exchange, str) or not exchange.strip():
+            raise RuntimeError("tick-dispatch command exchange is missing")
+        if not isinstance(instrument_id, str) or not instrument_id.strip():
+            raise RuntimeError("tick-dispatch command instrument_id is missing")
+        return exchange.strip().upper(), instrument_id.strip()
+
+    def _queue_tick_dispatch(self, path):
+        try:
+            target = self._pending_target(path)
+        except Exception:
+            self._process_path(path)
+            return False
+        with self._pending_lock:
+            if any(item[0] == path for item in self._pending_paths):
+                return False
+            self._pending_paths.append((path, target))
+        return True
+
     def poll_commands(self):
         if not self._config:
             return 0
@@ -1655,20 +1767,23 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
         activity = 0
         try:
             paths = []
+            with self._pending_lock:
+                pending_paths = set(item[0] for item in self._pending_paths)
             for folder in ("control", "commands"):
                 directory = os.path.join(self._partition, folder)
-                for name in sorted(name for name in os.listdir(directory) if name.endswith(".json")):
-                    paths.append(os.path.join(directory, name))
+                for name in sorted(name for name in os.listdir(directory) if self._is_queue_file(name)):
+                    candidate = os.path.join(directory, name)
+                    if candidate in pending_paths:
+                        continue
+                    paths.append(candidate)
                     if len(paths) >= self._config["max_batch"]:
                         break
                 if len(paths) >= self._config["max_batch"]:
                     break
             for path in paths:
                 if self._config["command_dispatch_mode"] == "TICK_DISPATCH" and os.path.dirname(path).endswith("commands"):
-                    claimed = self._claim_path(path)
-                    if claimed is not None:
-                        with self._pending_lock:
-                            self._pending_paths.append(claimed)
+                    claimed = self._claim_path(path) if path.endswith(".json") else path
+                    if claimed is not None and self._queue_tick_dispatch(claimed):
                         activity += 1
                     continue
                 self._process_path(path)
@@ -1721,14 +1836,16 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
                 pass
             self._dead_letter(path)
 
-    def _drain_tick_dispatch(self):
+    def _drain_tick_dispatch(self, target):
+        selected = None
         with self._pending_lock:
-            paths = self._pending_paths[:1]
-            self._pending_paths = self._pending_paths[1:]
-        for path in paths:
-            if os.path.exists(path):
-                self._process_path(path)
-        return len(paths)
+            for index, item in enumerate(self._pending_paths):
+                if item[1] == target:
+                    selected = self._pending_paths.pop(index)
+                    break
+        if selected is not None and os.path.exists(selected[0]):
+            self._process_path(selected[0])
+        return 1 if selected is not None else 0
 
     def _has_pending_tick_commands(self):
         with self._pending_lock:
@@ -1888,7 +2005,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             if self._config and self._config["command_dispatch_mode"] == "TICK_DISPATCH":
                 if time.time() - self._last_scan_at >= self._config["command_scan_idle_ms"] / 1000.0:
                     self.poll_commands()
-                self._drain_tick_dispatch()
+                self._drain_tick_dispatch(key)
             if self._config and time.time() - self._last_heartbeat_at >= self._config["heartbeat_seconds"]:
                 self.heartbeat()
         except Exception as exc:

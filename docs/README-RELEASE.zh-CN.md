@@ -54,12 +54,23 @@ $BridgeRoot = "C:\WorkBuddyPythonGO\runtime"
 5. Bridge 使用 Python 标准库直接下载九期网电脑版保证金手续费表，不安装任何额外采集依赖；
 6. 中文向导依次处理以下内容：
    - 从上次保存位置、旧安装包 runtime 或稳定默认位置中选择运行目录；
+   - 新 runtime 选择“小账户保守、人工均衡、自动策略”之一；金额上限与账户权益比例同时生效，默认推荐小账户保守；
    - 自动发现常见 WorkBuddy MCP 配置，并询问是否合并；
    - 是否绑定 `main_futures` 投资者账号（这是账号而非密码，输入会明文显示，完整账号仅写入本机 Adapter 配置）；
    - 自动发现无限易 `pyStrategy\self_strategy` 目录，由用户选定后安全部署 Adapter；
    - 是否创建桌面启动和状态入口；保证金数据按需更新已合并到启动入口。
 
 方括号中的值是默认值，直接按 Enter 即可采用。向导不会启动 Worker、无限易或 WorkBuddy，不会签名 Profile，也不会开放交易。
+
+三套预设只用于创建新 runtime，已有配置不会被安装器静默改写：
+
+| 预设 | 单笔手数 | 单笔名义绝对上限 | 单笔保证金 / 总保证金权益比例 | 价格偏离 |
+| --- | ---: | ---: | ---: | ---: |
+| 小账户保守 | 1 | 10 万元 | 5% / 30% | 0.5% 且 5 Tick |
+| 人工均衡 | 5 | 50 万元 | 10% / 50% | 2% 且 20 Tick |
+| 自动策略 | 2 | 20 万元 | 5% / 40% | 0.5% 且 5 Tick |
+
+实际有效金额取表中绝对上限与对应账户权益比例两者较小值。预设是软件安全起点，不代表适合具体账户，也不是投资建议；启用交易前仍应按目标合约保证金、流动性和账户规模复核。
 
 首次绑定后，状态显示“交易尚未启用”，查询无需先完成 P0，也无需解除这个保护。已绑定账号的运行目录重复运行向导时，向导会直接保留原账号指纹，不再询问重新绑定，因此不会因重复安装而作废 Profile 或触发事故熔断。只有目标投资者账号确实变化时，才按第 6.1 节使用 `bind-investor`。日常运行应使用“启动PythonGO桥接.cmd”，不要把“首次安装与配置.cmd”当作日常启动器。
 
@@ -361,7 +372,7 @@ python -m workbuddy_pythongo.worker --config $BridgeConfig --confirm-mode LIMITE
 
 `bridge.json` 的 `instrument_allowlist` 建议在自动模式前显式填写精确交易所和合约。当前实现中空数组表示不限制合约；这不适合有限自动部署。
 
-启动器会把该白名单同步为 Adapter 的行情预订阅列表。完整重启无限易并启动 Adapter 后，这些合约会在下单前持续接收 Tick；白名单为空时仍需首次按需订阅。
+启动器会把该白名单同步为 Adapter 的行情预订阅列表。完整重启无限易并启动 Adapter 后，这些合约会在下单前持续接收 Tick；白名单为空时仍需首次按需订阅。`TICK_DISPATCH` 必须等命令所绑定的精确交易所和合约 Tick 到达，其他合约 Tick 不会触发该命令。Adapter 重启后会恢复 `.json.processing-*` 文件，并继续通过签名信封与执行日记判断是否可执行；`PRE_SUBMIT` 未知结果仍不会自动重发。
 
 先读取实际硬限制，不要照抄其他电脑的额度：
 
@@ -512,7 +523,11 @@ remaining_notional>0
 python -m workbuddy_pythongo.console --config $BridgeConfig halt --reason "operator emergency stop"
 ```
 
-WorkBuddy 也可以调用 `halt_trading`。只有本机 Console 能解除熔断，解除时一定回到 `OBSERVE_ONLY`。
+WorkBuddy 也可以调用 `halt_trading`。只有本机 Console 能解除熔断，解除时一定回到 `OBSERVE_ONLY`。熔断不再等于“禁止一切操作”：风险增加型开仓会被拒绝，但撤单和严格减仓仍保留。严格减仓必须通过有效 Profile、精确平今/平昨映射、新鲜目标持仓、可平量和价格保护；它不能借此反向开仓或超过可平数量。
+
+`LIMITED_AUTO` 的瞬态异常使用 `PAUSE_NEW_OPEN`：暂停新的开仓，但保留同样严格的减仓和撤单。健康状态会返回 `READY`、`PAUSE_NEW_OPEN` 或 `RISK_REDUCING_ONLY`，便于界面直接告诉用户还能做什么。
+
+普通交易 Preview 使用更短的资金/持仓与行情时效。若发现缺失或陈旧，Worker 会先自动发起一次 `purpose=TRADE` 的资金、持仓和行情同步；交易热路径不会请求 K 线。同步后仍不新鲜才返回对应风险原因。
 
 ## 10. 常见问题与处理
 

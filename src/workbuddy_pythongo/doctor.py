@@ -4,7 +4,7 @@ import os
 from importlib import resources
 
 from .assets.pythongo_embedded_adapter import (
-    CONFIG_FIELDS, PERFORMANCE_CONFIG_DEFAULTS, PROFILE_FIELDS,
+    ADAPTIVE_RISK_CONFIG_DEFAULTS, CONFIG_FIELDS, PERFORMANCE_CONFIG_DEFAULTS, PROFILE_FIELDS,
 )
 from .config import load_config
 from .console import _validate_profile
@@ -82,7 +82,7 @@ def run_doctor(config_path=None):
         try:
             adapter = _read_json(adapter_json)
             fields = set(adapter) if isinstance(adapter, dict) else set()
-            required = CONFIG_FIELDS - set(PERFORMANCE_CONFIG_DEFAULTS)
+            required = CONFIG_FIELDS - set(PERFORMANCE_CONFIG_DEFAULTS) - set(ADAPTIVE_RISK_CONFIG_DEFAULTS)
             valid = required <= fields <= CONFIG_FIELDS
             add(prefix + "adapter_config_schema", valid, adapter_json)
             if not valid:
@@ -108,13 +108,20 @@ def run_doctor(config_path=None):
                 and adapter["adapter_max_total_margin"] == limits.max_total_margin
                 and adapter["adapter_max_risk_ratio"] == limits.max_risk_ratio
                 and adapter["max_snapshot_age_seconds"] == limits.max_snapshot_age_seconds
-                and adapter["max_quote_age_seconds"] == limits.max_quote_age_seconds
+                and adapter["max_quote_age_seconds"] == limits.trade_max_quote_age_seconds
                 and adapter["adapter_max_auto_session_notional"] == limits.max_auto_session_notional
                 and adapter["adapter_max_auto_orders"] == limits.max_auto_orders
                 and adapter["adapter_min_auto_order_interval_seconds"] == limits.min_auto_order_interval_seconds
                 and adapter["adapter_max_auto_concurrent_orders"] == limits.max_auto_concurrent_orders
                 and adapter["adapter_max_auto_instrument_position_notional"] == limits.max_auto_instrument_position_notional
                 and adapter["adapter_max_auto_account_drawdown"] == limits.max_auto_account_drawdown
+                and adapter.get("adapter_max_price_deviation_pct", 0.02) == limits.max_price_deviation_pct
+                and adapter.get("adapter_max_price_deviation_ticks", 20) == limits.max_price_deviation_ticks
+                and adapter.get("adapter_max_order_notional_equity_pct", 1.0) == limits.max_order_notional_equity_pct
+                and adapter.get("adapter_max_margin_per_order_equity_pct", 0.10) == limits.max_margin_per_order_equity_pct
+                and adapter.get("adapter_max_total_margin_equity_pct", 0.50) == limits.max_total_margin_equity_pct
+                and adapter.get("adapter_max_daily_loss", 10000.0) == limits.max_daily_loss
+                and adapter.get("adapter_max_daily_loss_equity_pct", 0.05) == limits.max_daily_loss_equity_pct
             )
             add(prefix + "risk_limit_sync", risk_ok, "duplicated Worker/Adapter hard limits")
             profile = _read_json(adapter["mapping_profile"])

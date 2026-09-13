@@ -538,7 +538,7 @@ PythonGO v2 暴露了基于 `BackgroundScheduler` 的 `Scheduler`，但现场 P0
 
 后台循环不执行长耗时查询、外部网络请求、批量历史下载或数据库迁移。命令和 ACK 在有活动时每 100ms 扫描、空闲时每 200ms 扫描；租约、对账等维护任务仍按 1 秒级周期运行，避免高频 SQLite 写锁。`on_stop` 必须置停止事件并有界等待线程退出；心跳还由 `on_tick` 提供降级补偿。
 
-后台循环和 `on_tick` 都可能触发降级扫描，因此 Adapter 使用非阻塞扫描互斥锁。发现命令后必须先在同一目录原子改名为唯一 `.processing-*` 名称，再进行验签和处理；只有原子领取成功的扫描器可以执行。源文件已被其他扫描器领取导致的 `FileNotFoundError` 属于正常竞争，不写拒绝 ACK、不进死信。该规则同时防止残留线程或误启动双实例重复消费。
+后台循环和 `on_tick` 都可能触发降级扫描，因此 Adapter 使用非阻塞扫描互斥锁。发现命令后必须先在同一目录原子改名为唯一 `.processing-*` 名称，再进行验签和处理；只有原子领取成功的扫描器可以执行。源文件已被其他扫描器领取导致的 `FileNotFoundError` 属于正常竞争，不写拒绝 ACK、不进死信。重启后扫描器会恢复 `.json.processing-*`，再通过验签与执行日记判定可执行、已完成或 `SUBMIT_UNKNOWN`，不得盲目重发。该规则同时防止残留线程或误启动双实例重复消费。
 
 Adapter 在 `on_start` 阶段预订阅账户 `instrument_allowlist` 同步到 ready 配置中的全部精确合约，并把后续 Tick 持续发布为本地行情快照。白名单为空时无法预知目标合约，仍由首次 `request_sync(QUOTE)` 建立按需订阅。K 线经 `MarketCenter` 单独读取，不得放入 `purpose=TRADE` 的资金、持仓和行情同步热路径。
 
@@ -551,7 +551,7 @@ Adapter 在 `on_start` 阶段预订阅账户 `instrument_allowlist` 同步到 re
 | 配置 | 命令扫描 | 报撤单执行 | 特点 |
 | --- | --- | --- | --- |
 | `TIMER_DISPATCH` | Adapter 后台循环 | 受锁保护的后台执行器 | 仅在兼容性测试通过后启用 |
-| `TICK_DISPATCH` | 后台循环入内存队列 | 下一次 `on_tick` 回调 | 更保守；无 Tick 时存在延迟 |
+| `TICK_DISPATCH` | 后台循环按 `(exchange, instrument_id)` 入内存队列 | 目标合约下一次 `on_tick` 回调 | 更保守；其他合约 Tick 不触发，无目标 Tick 时存在延迟 |
 
 无论哪种配置，都必须：
 
@@ -1018,7 +1018,7 @@ sequenceDiagram
 - 无限易在线、Adapter 运行且心跳新鲜；
 - 账号指纹一致；
 - Adapter 与 Worker 都允许交易；
-- 无熔断或待对账；
+- 无待对账；开仓不得处于熔断或 `PAUSE_NEW_OPEN`，严格减仓可在保护状态下继续；
 - 行情、持仓和资金仍新鲜；
 - 可平量、保证金和限额仍满足；
 - `source.signal_id` 未被消费，Preview 未被其他意图占用；
@@ -1235,7 +1235,7 @@ Worker 在 Preview 和 Submit 时检查；Adapter 收到命令后使用最新本
 - 回调异常、队列积压或交易日不一致；
 - 本机或 WorkBuddy 请求紧急停止。
 
-熔断后 Adapter 保持运行、禁止新单、允许受控精确撤单并继续接收回报。
+熔断后 Adapter 保持运行，拒绝风险增加型新单，允许受控精确撤单，以及由有效 Profile、目标合约新鲜行情、目标持仓和可平量严格证明的减仓，并继续接收回报。`LIMITED_AUTO` 的瞬态异常进入 `PAUSE_NEW_OPEN`，而不是升级为全局硬熔断；该状态同样只暂停开仓，保留严格减仓和撤单。
 
 ## 21. 今昨仓拆单
 
@@ -1494,6 +1494,9 @@ MCP `cancel_order` 接受桥接订单 ID，Worker 映射到明确的 PythonGO `o
 - `max_daily_orders`、`max_daily_cancels`、`max_daily_loss`；
 - `max_snapshot_age_seconds`、`max_quote_age_seconds`；
 - `preview_ttl_seconds`、`command_ttl_seconds`。
+- 交易热路径：`trade_max_snapshot_age_seconds`、`trade_max_quote_age_seconds`、`trade_sync_timeout_ms`、`trade_sync_poll_ms`；
+- 双上限：`max_order_notional_equity_pct`、`max_margin_per_order_equity_pct`、`max_total_margin_equity_pct`、`max_daily_loss_equity_pct`；有效额度取绝对值与账户权益比例两者较小值；
+- 价格保护：`max_price_deviation_pct` 与 `max_price_deviation_ticks` 同时满足。
 - P1 自动硬上限：`max_auto_authorization_minutes`、`max_auto_session_notional`、`max_auto_orders`、`min_auto_order_interval_seconds`、`max_auto_concurrent_orders`、`max_auto_instrument_position_notional`、`max_auto_account_drawdown`、`auto_heartbeat_max_age_seconds`、`auto_max_queue_depth`。旧 v0.2 配置缺少这些字段时只采用代码内保守默认值；进入 `LIMITED_AUTO` 前必须将它们显式固化到 ready 目录的 Adapter 配置并由 `doctor` 核对。
 
 所有整数必须拒绝布尔值，所有数值必须有限且在显式范围内；任何未知字段、重复别名、重复 Adapter、空账户、非有限 JSON 数字或不安全路径都导致 `CONFIG_ERROR`，不得只告警后继续。
@@ -1565,7 +1568,7 @@ MCP `cancel_order` 接受桥接订单 ID，Worker 映射到明确的 PythonGO `o
 | `MANUAL_LIVE` | 是 | 可向真实柜台报单 | 已验证签名 Profile；逐笔授权或 1–60 分钟账户级限时授权；启动时完整确认 |
 | `LIMITED_AUTO` | 是 | 仅允许审核过的确定性规则 | 还需 P1 结构化签名许可、`limited_auto_protocol=1`、策略版本/合约/动作/时间窗/预算双重校验 |
 
-`HALTED` 和 `RECONCILING` 是安全/健康状态，不是运行模式。熔断时保留当前模式用于审计，但禁止新单、撤销所有短时授权，并向各 Adapter 写入耐久 `LOCAL_HALT`；允许受控精确撤单和对账。解除熔断只能由本机 Console 完成，且模式强制改为 `OBSERVE_ONLY`。
+`HALTED` 和 `RECONCILING` 是安全/健康状态，不是运行模式。熔断时保留当前模式用于审计，但禁止风险增加型新单、撤销所有短时授权，并向各 Adapter 写入耐久 `LOCAL_HALT`；允许受控精确撤单、严格减仓和对账。解除熔断只能由本机 Console 完成，且模式强制改为 `OBSERVE_ONLY`。
 
 模式和授权规则：
 
@@ -1870,7 +1873,7 @@ P0 的实单兼容性探针只能由本机 Console 发起，不暴露到 MCP。�
 - Worker、Adapter 和请求模式不一致时失败关闭，熔断独立且解除后强制回到 `OBSERVE_ONLY`；
 - 未验证、未签名、绑定或构建不一致的 Profile 不能执行非观察命令；
 - 所有账号调用显式绑定 investor；
-- 行情、资金、持仓、客户端或 Adapter 过期时禁止新单；
+- 行情、资金、持仓、客户端或 Adapter 过期时先进行一次有界交易同步；仍过期则禁止新单；
 - 数据库或签名队列故障立即熔断；
 - 凭据和完整账号不进入 MCP、数据库正文或日志；
 - 全部批准、风险、命令、订单和成交可追溯。

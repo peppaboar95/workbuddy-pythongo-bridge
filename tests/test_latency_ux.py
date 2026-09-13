@@ -3,9 +3,11 @@ import os
 import tempfile
 import unittest
 
-from workbuddy_pythongo.assets.pythongo_embedded_adapter import WorkBuddyPythonGOAdapter
+from workbuddy_pythongo.assets.pythongo_embedded_adapter import (
+    ADAPTIVE_RISK_CONFIG_DEFAULTS, WorkBuddyPythonGOAdapter,
+)
 from workbuddy_pythongo.bootstrap import initialize
-from workbuddy_pythongo.config import load_config
+from workbuddy_pythongo.config import ADAPTIVE_RISK_DEFAULTS, load_config
 from workbuddy_pythongo.console import _sync_adapter_mode
 from workbuddy_pythongo.doctor import run_doctor
 from workbuddy_pythongo.errors import BridgeError
@@ -170,6 +172,30 @@ class LatencyUxTests(unittest.TestCase):
             )
             self.assertTrue(schema["ok"])
 
+    def test_existing_configs_load_with_adaptive_risk_defaults(self):
+        with tempfile.TemporaryDirectory() as root:
+            initialized = initialize(root)
+            with open(initialized["config"], "r", encoding="utf-8") as stream:
+                bridge = json.load(stream)
+            for name in ADAPTIVE_RISK_DEFAULTS:
+                bridge["accounts"][0]["risk_limits"].pop(name)
+            with open(initialized["config"], "w", encoding="utf-8") as stream:
+                json.dump(bridge, stream, ensure_ascii=False)
+
+            adapter_path = os.path.join(initialized["ready_dir"], "pythongo_adapter.json")
+            with open(adapter_path, "r", encoding="utf-8") as stream:
+                adapter = json.load(stream)
+            for name in ADAPTIVE_RISK_CONFIG_DEFAULTS:
+                adapter.pop(name)
+            with open(adapter_path, "w", encoding="utf-8") as stream:
+                json.dump(adapter, stream, ensure_ascii=False)
+
+            config = load_config(initialized["config"])
+            self.assertEqual(config.account("main_futures").risk_limits.trade_max_quote_age_seconds, 5)
+            report = run_doctor(initialized["config"])
+            schema = next(item for item in report["checks"] if item["name"].endswith("adapter_config_schema"))
+            self.assertTrue(schema["ok"])
+
     def test_worker_uses_100_to_200_ms_adaptive_scan(self):
         loop = RuntimeLoop(object())
         self.assertEqual(loop.active_interval, 0.1)
@@ -180,6 +206,71 @@ class LatencyUxTests(unittest.TestCase):
         self.assertFalse(RuntimeLoop._ingest_activity({
             "main_futures": {"events": {"processed": 0, "dead_lettered": 0}},
         }))
+
+    def test_tick_dispatch_recovers_processing_file_and_waits_for_target_tick(self):
+        with tempfile.TemporaryDirectory() as root:
+            initialized = initialize(root)
+            adapter_path = os.path.join(initialized["ready_dir"], "pythongo_adapter.json")
+            with open(adapter_path, "r", encoding="utf-8") as stream:
+                adapter_config = json.load(stream)
+            processing = os.path.join(
+                root, "data", "queue", "pythongo_futures_01", "commands",
+                "command.json.processing-crash",
+            )
+            with open(processing, "w", encoding="utf-8") as stream:
+                json.dump({
+                    "payload": {
+                        "type": "EXECUTE_ORDER", "exchange": "SHFE",
+                        "instrument_id": "au2610",
+                    },
+                }, stream)
+
+            processed = []
+            adapter = WorkBuddyPythonGOAdapter()
+            adapter._config = adapter_config
+            adapter._process_path = lambda path: processed.append(path)
+
+            _, _, core = build_runtime(initialized["config"])
+            self.assertEqual(core.file_queue.depths("pythongo_futures_01")["commands"], 1)
+            self.assertEqual(adapter.poll_commands(), 1)
+            self.assertEqual(adapter._drain_tick_dispatch(("DCE", "i2609")), 0)
+            self.assertEqual(processed, [])
+            self.assertEqual(adapter._drain_tick_dispatch(("SHFE", "au2610")), 1)
+            self.assertEqual(processed, [processing])
+
+    def test_stale_trade_context_requests_one_hot_path_refresh_before_rejecting(self):
+        with tempfile.TemporaryDirectory() as root:
+            initialized = initialize(root)
+            _, database, core = build_runtime(initialized["config"])
+            now = iso_now()
+            with database.transaction(immediate=True) as connection:
+                connection.execute(
+                    "INSERT INTO heartbeats(adapter_instance,account_alias,status,mode,profile_status,"
+                    "occurred_at,received_at,payload_json) VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        "pythongo_futures_01", "main_futures", "READY", "OBSERVE_ONLY",
+                        "UNVERIFIED", now, now, "{}",
+                    ),
+                )
+            builds = iter([
+                {"risk": {"reasons": ["ACCOUNT_SNAPSHOT_STALE", "QUOTE_STALE"]}},
+                {"risk": {"reasons": []}},
+            ])
+            sync_calls = []
+            core._build_current = lambda _connection, _request: next(builds)
+            core.request_sync = lambda *args, **kwargs: sync_calls.append((args, kwargs)) or {}
+            core.ingester.scan_once = lambda: {}
+
+            result = core._refresh_trade_context({
+                "account_alias": "main_futures",
+                "instrument": {"exchange": "SHFE", "instrument_id": "au2610"},
+            })
+
+            self.assertTrue(result["attempted"])
+            self.assertTrue(result["completed"])
+            self.assertEqual(len(sync_calls), 1)
+            self.assertEqual(sync_calls[0][0][1], ["ACCOUNT", "POSITION", "QUOTE"])
+            self.assertEqual(sync_calls[0][1]["purpose"], "TRADE")
 
 
 if __name__ == "__main__":

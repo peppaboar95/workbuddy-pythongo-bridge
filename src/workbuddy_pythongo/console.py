@@ -55,6 +55,30 @@ def _sync_adapter_mode(config, mode):
         path = _adapter_path(config, account)
         raw = _read_json(path)
         raw["pythongo_mode"] = mode
+        limits = account.risk_limits
+        raw.update({
+            "adapter_max_order_volume": limits.max_order_volume,
+            "adapter_max_order_notional": limits.max_order_notional,
+            "adapter_max_margin_per_order": limits.max_margin_per_order,
+            "adapter_max_total_margin": limits.max_total_margin,
+            "adapter_max_risk_ratio": limits.max_risk_ratio,
+            "adapter_max_auto_session_notional": limits.max_auto_session_notional,
+            "adapter_max_auto_orders": limits.max_auto_orders,
+            "adapter_min_auto_order_interval_seconds": limits.min_auto_order_interval_seconds,
+            "adapter_max_auto_concurrent_orders": limits.max_auto_concurrent_orders,
+            "adapter_max_auto_instrument_position_notional": limits.max_auto_instrument_position_notional,
+            "adapter_max_auto_account_drawdown": limits.max_auto_account_drawdown,
+            "max_snapshot_age_seconds": limits.max_snapshot_age_seconds,
+            "max_quote_age_seconds": limits.trade_max_quote_age_seconds,
+            "adapter_max_price_deviation_pct": limits.max_price_deviation_pct,
+            "adapter_max_price_deviation_ticks": limits.max_price_deviation_ticks,
+            "adapter_max_order_notional_equity_pct": limits.max_order_notional_equity_pct,
+            "adapter_max_margin_per_order_equity_pct": limits.max_margin_per_order_equity_pct,
+            "adapter_max_total_margin_equity_pct": limits.max_total_margin_equity_pct,
+            "adapter_max_daily_loss": limits.max_daily_loss,
+            "adapter_max_daily_loss_equity_pct": limits.max_daily_loss_equity_pct,
+        })
+        raw.setdefault("allow_reduce_only_while_halted", True)
         raw.setdefault("command_scan_active_ms", 100)
         raw.setdefault("command_scan_idle_ms", 200)
         raw["pre_subscribe_instruments"] = [
