@@ -97,6 +97,7 @@ try {
 
     Copy-Item -LiteralPath $wheelPath -Destination $stageFull
     Copy-Item -LiteralPath $installerCandidates[0].FullName -Destination $stageFull
+    Copy-Item -LiteralPath (Join-Path $repoRoot "install.ps1") -Destination $stageFull
     Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stageFull
     Copy-Item -LiteralPath $releaseNotesPath -Destination $stageFull
     Copy-Item -LiteralPath (Join-Path $repoRoot "docs\README-RELEASE.zh-CN.md") -Destination (Join-Path $stageFull "README-RELEASE.zh-CN.md")
@@ -137,6 +138,7 @@ try {
 
     $requiredEntries = @(
         $installerCandidates[0].Name,
+        "install.ps1",
         "LICENSE",
         "README-RELEASE.zh-CN.md",
         "workbuddy-pythongo-bridge-design.md",

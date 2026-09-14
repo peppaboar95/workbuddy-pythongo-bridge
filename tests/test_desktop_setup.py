@@ -79,14 +79,17 @@ class DesktopSetupTests(unittest.TestCase):
 
     def test_installer_keeps_the_original_cmd_wheel_flow(self):
         installer = (REPO_ROOT / "首次安装与配置.cmd").read_text(encoding="utf-8")
-        launcher_probe = installer.index('py -3 -c "import sys;')
-        python_probe = installer.index('python -c "import sys;')
+        powershell_installer = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+        self.assertTrue(installer.isascii())
+        self.assertIn('powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass', installer)
+        launcher_probe = powershell_installer.index('Test-Python310 -Executable "py.exe"')
+        python_probe = powershell_installer.index('Test-Python310 -Executable "python.exe"')
         self.assertLess(launcher_probe, python_probe)
-        self.assertIn("-m pip install --user --upgrade --force-reinstall --no-deps", installer)
-        self.assertIn("-m workbuddy_pythongo.desktop setup", installer)
-        self.assertIn("%LOCALAPPDATA%\\WorkBuddyPythonGO\\runtime", installer)
-        self.assertIn("--discover-existing --legacy-root", installer)
-        self.assertNotIn("--repair", installer)
+        self.assertIn('"--user", "--upgrade", "--force-reinstall"', powershell_installer)
+        self.assertIn("-m workbuddy_pythongo.desktop setup", powershell_installer)
+        self.assertIn('Join-Path $env:LOCALAPPDATA "WorkBuddyPythonGO\\runtime"', powershell_installer)
+        self.assertIn("--discover-existing --legacy-root", powershell_installer)
+        self.assertNotIn("--repair", powershell_installer)
 
     def test_observe_mode_reports_query_ready_while_trade_protection_is_active(self):
         health = {

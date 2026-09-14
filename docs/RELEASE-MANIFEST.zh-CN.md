@@ -24,6 +24,7 @@
 ## 包内文件
 
 - `首次安装与配置.cmd`：Windows 安装入口；
+- `install.ps1`：由安装入口调用的 UTF-8 中文安装逻辑；
 - `workbuddy_pythongo_bridge-0.3.9-py3-none-any.whl`：Python 安装包；
 - `LICENSE`：专有许可条款；
 - `README-RELEASE.zh-CN.md`：完整使用说明；
