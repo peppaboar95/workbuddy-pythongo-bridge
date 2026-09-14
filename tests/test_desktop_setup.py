@@ -81,6 +81,11 @@ class DesktopSetupTests(unittest.TestCase):
         installer = (REPO_ROOT / "首次安装与配置.cmd").read_text(encoding="utf-8")
         powershell_installer = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8-sig")
         self.assertTrue(installer.isascii())
+        codepage_probe = installer.index("chcp 65001 >nul")
+        utf8_probe = installer.index('set "PYTHONUTF8=1"')
+        powershell_probe = installer.index("powershell.exe")
+        self.assertLess(codepage_probe, powershell_probe)
+        self.assertLess(utf8_probe, powershell_probe)
         self.assertIn('powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass', installer)
         launcher_probe = powershell_installer.index('Test-Python310 -Executable "py.exe"')
         python_probe = powershell_installer.index('Test-Python310 -Executable "python.exe"')
@@ -89,6 +94,7 @@ class DesktopSetupTests(unittest.TestCase):
         self.assertIn("-m workbuddy_pythongo.desktop setup", powershell_installer)
         self.assertIn('Join-Path $env:LOCALAPPDATA "WorkBuddyPythonGO\\runtime"', powershell_installer)
         self.assertIn("--discover-existing --legacy-root", powershell_installer)
+        self.assertNotIn("| Out-Host", powershell_installer)
         self.assertNotIn("--repair", powershell_installer)
 
     def test_observe_mode_reports_query_ready_while_trade_protection_is_active(self):

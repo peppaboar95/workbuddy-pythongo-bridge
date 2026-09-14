@@ -1,5 +1,8 @@
 @echo off
 setlocal
+chcp 65001 >nul
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 
 if /i "%~1"=="--syntax-check" (
   echo BATCH_SYNTAX_OK

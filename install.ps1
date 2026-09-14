@@ -121,7 +121,7 @@ function Invoke-Installer {
         return
     }
 
-    & $pythonExecutable @pythonPrefix @pipArguments $installTarget | Out-Host
+    & $pythonExecutable @pythonPrefix @pipArguments $installTarget
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "[错误] 软件包安装或更新失败。" -ForegroundColor Red
@@ -143,7 +143,7 @@ function Invoke-Installer {
     }
     $legacyRoot = Join-Path $PSScriptRoot "runtime"
     & $pythonExecutable @pythonPrefix -m workbuddy_pythongo.desktop setup `
-        --root $runtimeRoot --discover-existing --legacy-root $legacyRoot | Out-Host
+        --root $runtimeRoot --discover-existing --legacy-root $legacyRoot
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "[错误] 配置向导未完成。" -ForegroundColor Red
