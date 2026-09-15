@@ -234,9 +234,22 @@ def _first_trade_blockers(config, connection, health):
     for item in accounts:
         alias = item["account_alias"]
         if not item.get("observation_ready") or item.get("adapter_mode") != "OBSERVE_ONLY":
+            reasons = []
+            status = item.get("adapter_status") or "OFFLINE"
+            if status != "READY":
+                reasons.append("Adapter当前为%s，请在无限易中启动Adapter策略" % status)
+            age = item.get("heartbeat_age_seconds")
+            if age is None:
+                reasons.append("尚无心跳，请保持Worker和Adapter运行并等待心跳到达")
+            elif age > 15:
+                reasons.append("心跳已过期（%d秒），请检查Worker和Adapter是否持续运行" % age)
+            if age is not None and (item.get("adapter_mode") != "OBSERVE_ONLY" or not item.get("mode_match")):
+                reasons.append("Worker和Adapter需统一为OBSERVE_ONLY；模式变更后重新加载Adapter配置")
+            if age is not None and not item.get("margin_policy_match"):
+                reasons.append("保证金策略未同步，请重新加载Adapter配置并等待新心跳")
             blockers.append({
                 "code": "ADAPTER_NOT_READY",
-                "message": "%s：先以观察模式运行Worker和Adapter，确保心跳新鲜、模式及保证金策略同步。" % alias,
+                "message": "%s：%s。" % (alias, "；".join(reasons) or "观察模式同步尚未完成，请等待新心跳"),
             })
         if item.get("profile_status") != "VALID":
             blockers.append({

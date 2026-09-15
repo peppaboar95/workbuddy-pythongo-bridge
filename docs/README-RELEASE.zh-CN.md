@@ -298,18 +298,18 @@ python -m workbuddy_pythongo.console --config $BridgeConfig sign-profile main_fu
 6. 使用 `OBSERVE_ONLY` 启动 Worker 和 Adapter；
 7. 检查 `doctor` 的 Profile 三项校验通过，且新心跳为 `profile_status=VALID`。
 
-### 6.5 首次启用交易：现有入口中的 T
+### 6.5 首次启用交易：先运行观察模式，再在状态窗口确认
 
 首次绑定账号会保留 `SETUP_LOCK`。Profile 签名与首次启用是独立步骤，签名不会自动解除保护。
 
 1. 按第 6.2–6.4 节完成 P0、签名 Profile 并重新加载 Adapter；
-2. 以 `OBSERVE_ONLY` 运行 Worker 和 Adapter，完成同步与对账；
-3. 再次打开“启动PythonGO桥接.cmd”或“查看PythonGO桥接状态.cmd”，输入 `T`；Worker 已经运行时，状态窗口也会提供此入口；
-4. 向导检查 Profile 的签名及绑定、Adapter 的新鲜心跳与 `VALID` 状态、观察模式和保证金策略同步，以及是否存在结果未知的报单；条件不足时只显示待完成步骤；
-5. 检查通过后，确认当前电脑、账号、柜台和实际 P0 证据，完整输入 `ENABLE-FIRST-TRADE`；直接按 Enter 可取消；
+2. 打开“启动PythonGO桥接.cmd”，选择 `1：OBSERVE_ONLY`，保持 Worker 窗口打开；在无限易中启动 Adapter，完成同步与对账；
+3. 另开“查看PythonGO桥接状态.cmd”检查；Worker 已经运行时，再次打开启动入口也会显示这项检查；
+4. 检查 Profile 的签名及绑定、Adapter 的新鲜心跳与 `VALID` 状态、观察模式和保证金策略同步，以及是否存在结果未知的报单；条件不足时列出具体待完成步骤，不显示启用确认选项；
+5. 全部检查通过后，窗口才显示 `T：确认首次启用交易`。输入 `T`，确认当前电脑、账号、柜台和实际 P0 证据，再完整输入 `ENABLE-FIRST-TRADE`；直接按 Enter 可取消；
 6. 保护解除后仍保持 `OBSERVE_ONLY`，旧交易批准、人工会话及自动许可被撤销；重新加载 Adapter、完成同步和对账后，再按第 7 章切换交易模式。
 
-此入口只处理 `SETUP_LOCK`，不能解除账号变更、策略复核或事故保护。桌面仍只有两个独立的 `.cmd`，不会增加辅助文件。未创建桌面入口时，也可运行同一交互向导：
+此入口只处理 `SETUP_LOCK`，不能解除账号变更、策略复核或事故保护。Worker 未运行时，启动菜单只用于选择运行模式，输入 `T` 会提示先启动观察模式。桌面仍只有两个独立的 `.cmd`，不会增加辅助文件。未创建桌面入口时，先以观察模式运行 Worker 和 Adapter，也可运行同一交互向导：
 
 ```powershell
 python -m workbuddy_pythongo.desktop --config $BridgeConfig enable-trading
@@ -331,8 +331,8 @@ python -m workbuddy_pythongo.console --config $BridgeConfig clear-halt --confirm
 
 启动菜单有三个不同提示：
 
-1. `请输入序号 [1]`：输入 `1`、`2`、`3`、`4` 选择模式，输入 `T` 进入首次启用向导，或输入 `Q` 退出；
-2. 受阻说明后的操作提示：输入 `T` 进入首次启用向导，按 Enter 返回菜单，或输入 `Q` 退出；在这里输入 `LIMITED_AUTO` 不是确认模式；
+1. `请输入序号 [1]`：输入 `1`、`2`、`3`、`4` 选择模式，或输入 `Q` 退出。首次交易准备先选择 `1`，启动 Worker 和 Adapter 后另开状态入口检查；
+2. 受阻说明后的操作提示：按 Enter 返回菜单，或输入 `Q` 退出；在这里输入 `LIMITED_AUTO` 不是确认模式；
 3. 门禁通过后的 `完整输入<模式名>`：这里才输入 `SIM_SIGNAL`、`MANUAL_LIVE` 或 `LIMITED_AUTO`。
 
 如果菜单标注 `[暂不可用]`，必须先解决括号中的门禁原因，不能用确认词绕过。
@@ -560,7 +560,7 @@ WorkBuddy 也可以调用 `halt_trading`。只有本机 Console 能解除熔断�
 
 ### 菜单显示“本地熔断尚未解除”
 
-不要在受阻提示处输入模式名称。首次安装保护可输入 `T`，按第 6.5 节检查并启用；其他保护先完成 Profile、Adapter 和对账复核，再按第 6.6 节本机解除。
+不要在受阻提示处输入模式名称。首次安装保护先选择 `1` 启动观察模式，启动 Adapter 后另开状态入口，按第 6.5 节检查并启用；其他保护先完成 Profile、Adapter 和对账复核，再按第 6.6 节本机解除。
 
 ### `doctor` 显示 `worker=OBSERVE_ONLY adapter=LIMITED_AUTO`
 

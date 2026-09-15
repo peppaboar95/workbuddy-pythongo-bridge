@@ -663,10 +663,10 @@ def run_setup(
     print("  4. 双击“启动PythonGO桥接.cmd”，直接按Enter使用OBSERVE_ONLY。")
     print("  5. 此时即可使用查询接口；P0、Profile签名和解除交易保护都不是查询前置步骤。")
     print("\n交易功能的启用入口：")
-    print("  双击“启动PythonGO桥接.cmd”，输入T进入“首次启用交易”向导。")
-    print("  向导会检查P0/Profile和Adapter加载状态，明确列出尚未完成的步骤。")
-    print("  完成P0验证和Profile签名后，以OBSERVE_ONLY运行Worker和Adapter并完成同步、对账。")
-    print("  再打开启动或状态入口，输入T；检查通过并明确确认后才能解除首次安装保护。")
+    print("  完成P0验证和Profile签名后，先在启动入口选择1（OBSERVE_ONLY），保持Worker窗口打开。")
+    print("  在无限易中启动Adapter，完成观察模式同步和对账。")
+    print("  另开“查看PythonGO桥接状态.cmd”；条件不足时会列出待完成的步骤。")
+    print("  前置检查通过后，状态窗口才会显示T；输入T并明确确认后才能解除首次安装保护。")
     print("  解除后仍保持OBSERVE_ONLY，再按提示选择交易模式和配置交易授权。")
     print("日常启动只使用“启动PythonGO桥接.cmd”，无需重复安装。")
     print("\n配置向导不会自动启动Worker、无限易或WorkBuddy。")
@@ -783,7 +783,7 @@ def print_status_human(config_path, probe, issues):
         if health.get("halted") or protection.get("active"):
             if protection_kind == "SETUP_LOCK" and not health.get("halted"):
                 print("交易状态：尚未启用（首次配置状态，不是故障或熔断）。")
-                print("需要交易时：完成一次性P0验证并签名Profile；只查询无需处理。")
+                print("需要交易时：完成P0/Profile验证，以观察模式运行Worker和Adapter，再打开状态入口检查。")
             elif protection_kind == "POLICY_REVIEW":
                 print("交易状态：保证金策略需要复核；查询不受影响。")
                 print("原因：%s" % (health.get("halt_reason") or protection.get("reason") or "未记录"))
@@ -891,7 +891,7 @@ def _blocker_summary(blockers):
         "TRADE_PROTECTION_ACTIVE": "交易保护已开启，需本机复核",
     }
     protection_labels = {
-        "SETUP_LOCK": "首次交易尚未启用：输入T进入启用向导",
+        "SETUP_LOCK": "首次交易尚未启用：先启动观察模式，再打开状态入口完成检查和启用",
         "ACCOUNT_CHANGE": "账号变更保护：需复核账号和Profile",
         "POLICY_REVIEW": "保证金策略变更：需先完成策略复核",
         "INCIDENT_HALT": "事故保护：需复核并对账后本机解除",
@@ -908,6 +908,11 @@ def _blocker_summary(blockers):
 def run_first_trade_enablement(config_path, input_func=input):
     _header("首次启用交易")
     print("当前配置：%s" % os.path.abspath(config_path))
+    if probe_worker(config_path)["state"] != "RUNNING":
+        print("Worker尚未运行或健康接口不可用，当前不能首次启用交易。")
+        print("先打开启动入口选择1（OBSERVE_ONLY），保持窗口打开，并在无限易中启动Adapter。")
+        print("再另开状态入口；前置检查通过后才会显示T。")
+        return 2
     state = get_first_trade_enablement(config_path)
     if state["kind"] == "NONE":
         print("当前没有首次安装保护；交易仍需完成P0/Profile验证、选择运行模式并配置相应授权。")
@@ -917,7 +922,7 @@ def run_first_trade_enablement(config_path, input_func=input):
         for blocker in state["blockers"]:
             print("  - %s" % blocker["message"])
         print("P0现场核对和Profile签名流程见README-RELEASE.zh-CN.md第6章。")
-        print("以观察模式运行后，可再次打开启动或状态入口，输入T重新检查。")
+        print("完成上述步骤后，另开状态入口重新检查；前置检查通过后才会显示T。")
         return 2
     print("检查通过：首次安装保护、观察模式、Profile校验及Adapter加载状态均满足要求。")
     print("请确认P0证据来自当前电脑、账号和柜台，并已完成观察模式同步和对账。")
@@ -941,11 +946,22 @@ def run_first_trade_enablement(config_path, input_func=input):
     return 0
 
 
-def _offer_first_trade_enablement(config_path, health, input_func=input):
+def _offer_first_trade_enablement(config_path, health, input_func=input, *, worker_running=True):
     if (health.get("trade_protection") or {}).get("kind") != "SETUP_LOCK":
         return
-    print("\nT. 首次启用交易（检查P0/Profile并解除首次安装保护）")
-    if input_func("输入T进入启用向导；直接按Enter结束状态查看：").strip().lower() == "t":
+    if not worker_running:
+        print("\n首次交易准备：先在启动入口选择1（OBSERVE_ONLY），保持Worker窗口打开，并启动Adapter。")
+        print("再另开状态入口；前置检查通过后才会显示T。")
+        return
+    state = get_first_trade_enablement(config_path)
+    if not state["can_enable"]:
+        print("\n首次交易准备尚未完成：")
+        for blocker in state["blockers"]:
+            print("  - %s" % blocker["message"])
+        print("保持Worker以观察模式运行，完成上述步骤后另开状态入口重新检查。")
+        return
+    print("\nT. 确认首次启用交易（前置检查已通过，确认后仍保持观察模式）")
+    if input_func("输入T进入确认步骤；直接按Enter结束状态查看：").strip().lower() == "t":
         run_first_trade_enablement(config_path, input_func)
 
 
@@ -957,27 +973,28 @@ def select_start_mode(availability=None, input_func=input):
             blockers = availability.get(mode) or []
             suffix = "  [暂不可用：%s]" % _blocker_summary(blockers) if blockers else ""
             print("  %s. %-13s %s%s" % (selected, mode, START_MODE_DESCRIPTIONS[mode], suffix))
-        print("  T. 首次启用交易（检查P0/Profile并解除首次安装保护）")
+        if any(item.get("kind") == "SETUP_LOCK" for blockers in availability.values() for item in blockers):
+            print("首次交易准备：先选择1启动观察模式并保持窗口打开，再在无限易中启动Adapter。")
+            print("随后另开状态入口；前置检查通过后才会显示T。")
         print("直接按Enter使用安全默认值OBSERVE_ONLY；输入Q可取消启动。")
         selected = input_func("请输入序号 [1]：").strip()
         if selected.lower() == "q":
             return None, None
         if selected.lower() == "t":
-            return "ENABLE_FIRST_TRADE", None
+            print("\n当前是Worker启动菜单。请先选择1启动观察模式并启动Adapter，再另开状态入口检查。\n")
+            continue
         mode = START_MODE_SELECTIONS.get(selected or "1")
         if mode is None:
-            print("\n输入无效：请输入1、2、3、4、T，或直接按Enter。\n")
+            print("\n输入无效：请输入1、2、3、4，或直接按Enter。\n")
             continue
         blockers = availability.get(mode) or []
         if blockers:
             print("\n%s当前暂不可用，请先完成以下步骤：" % mode)
             for blocker in blockers:
                 print("  - %s" % _blocker_summary([blocker]))
-            action = input_func("输入T进入首次启用向导；按Enter返回菜单；输入Q取消启动：").strip().lower()
+            action = input_func("按Enter返回菜单并选择1启动观察模式；输入Q取消启动：").strip().lower()
             if action == "q":
                 return None, None
-            if action == "t":
-                return "ENABLE_FIRST_TRADE", None
             print("")
             continue
         confirm = None
@@ -1008,9 +1025,6 @@ def start_desktop(config_path):
         if mode is None:
             print("\n已取消启动；配置、模式和熔断状态均未改变。")
             return 0
-        if mode == "ENABLE_FIRST_TRADE":
-            run_first_trade_enablement(config.path)
-            continue
         try:
             changed = set_mode(config.path, mode, confirm)
             break
@@ -1020,18 +1034,19 @@ def start_desktop(config_path):
             }:
                 raise
             print("\n%s启动前的安全状态已经变化：%s" % (mode, exc.message))
-            action = input("输入T进入首次启用向导；按Enter重新检查；输入Q取消启动：").strip().lower()
+            print("首次交易准备：先选择1启动观察模式并启动Adapter，再另开状态入口检查。")
+            action = input("按Enter重新检查并返回菜单；输入Q取消启动：").strip().lower()
             if action == "q":
                 print("\n已取消启动；安全门禁没有被绕过。")
                 return 0
-            if action == "t":
-                run_first_trade_enablement(config.path)
     print("\n本次启动模式：%s" % mode)
     print("ready目录中的Adapter配置已同步。")
     print("无限易通过pythongo_adapter.path直接读取ready配置，无需复制JSON或Profile。")
     print("模式或Profile变化后仍必须完整重启无限易，使Adapter重新加载。")
     if mode == "OBSERVE_ONLY":
         print("当前可使用查询、预览和空跑闭环；交易保护状态不会被启动器解除。")
+        if any(item.get("kind") == "SETUP_LOCK" for blockers in availability.values() for item in blockers):
+            print("首次交易准备：保持此窗口打开，启动Adapter后另开状态入口检查；前置检查通过后才会显示T。")
     elif mode == "MANUAL_LIVE":
         print("仍需为每笔预览授权，或创建1至60分钟人工会话。")
     elif mode == "LIMITED_AUTO":
@@ -1059,7 +1074,7 @@ def status_desktop(config_path):
         print("-" * 60 + "\n")
         report = run_doctor(config.path)
         print_doctor_human(report)
-        _offer_first_trade_enablement(config.path, report.get("health") or health)
+        _offer_first_trade_enablement(config.path, report.get("health") or health, worker_running=probe["state"] == "RUNNING")
         return 1
     print("\n状态正常，无需执行额外诊断。")
     _offer_first_trade_enablement(config.path, health)

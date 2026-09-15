@@ -13,7 +13,9 @@ from workbuddy_pythongo.console import (
     bind_investor, enable_first_trade, get_first_trade_enablement,
     get_non_observe_mode_blockers, sign_profile,
 )
-from workbuddy_pythongo.desktop import run_first_trade_enablement, select_start_mode, start_desktop
+from workbuddy_pythongo.desktop import (
+    _offer_first_trade_enablement, run_first_trade_enablement, select_start_mode, start_desktop, status_desktop,
+)
 from workbuddy_pythongo.errors import BridgeError
 from workbuddy_pythongo.util import iso_now, utc_now
 from workbuddy_pythongo.worker import build_runtime
@@ -32,6 +34,9 @@ class FirstTradeEnablementTests(unittest.TestCase):
         self.local_halt = pathlib.Path(
             self.config.data_dir, "pythongo_runtime", self.account.adapter_instance, "local_halt.json",
         )
+        self.worker_probe = mock.patch("workbuddy_pythongo.desktop.probe_worker", return_value={"state": "RUNNING"})
+        self.worker_probe.start()
+        self.addCleanup(self.worker_probe.stop)
 
     def state(self):
         with self.database.connect() as connection:
@@ -78,7 +83,7 @@ class FirstTradeEnablementTests(unittest.TestCase):
             result = run_first_trade_enablement(self.config_path, input_func=lambda _prompt: self.fail("Unexpected confirmation"))
         self.assertEqual(result, 2)
         self.assertIn("P0现场验证和Profile签名", output.getvalue())
-        self.assertIn("观察模式运行Worker和Adapter", output.getvalue())
+        self.assertIn("Adapter当前为OFFLINE", output.getvalue())
         self.assertEqual(self.state()["trade_protection_kind"], "SETUP_LOCK")
         self.assertEqual(self.local_halt.read_bytes(), before)
 
@@ -212,25 +217,80 @@ class FirstTradeEnablementTests(unittest.TestCase):
         self.assertEqual(self.state()["trade_protection_kind"], "SETUP_LOCK")
         self.assertEqual(self.local_halt.read_bytes(), before)
 
-    def test_menu_offers_first_enablement_and_explains_setup_lock(self):
+    def test_stopped_menu_redirects_t_to_observe_start_instead_of_enablement(self):
         blockers = get_non_observe_mode_blockers(self.config_path)
         availability = {"OBSERVE_ONLY": [], "LIMITED_AUTO": blockers}
-        answers = iter(["4", "t"])
+        answers = iter(["t", "4", "t", "1"])
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             selected = select_start_mode(availability, input_func=lambda _prompt: next(answers))
-        self.assertEqual(selected, ("ENABLE_FIRST_TRADE", None))
-        self.assertIn("输入T进入启用向导", output.getvalue())
-        self.assertIn("T. 首次启用交易", output.getvalue())
+        self.assertEqual(selected, ("OBSERVE_ONLY", None))
+        self.assertIn("先选择1启动观察模式", output.getvalue())
+        self.assertIn("另开状态入口", output.getvalue())
+        self.assertNotIn("输入T进入", output.getvalue())
+        self.assertNotIn("T. ", output.getvalue())
 
-    def test_entering_wizard_does_not_start_worker_or_select_trading_mode(self):
+    def test_stopped_start_only_runs_selected_worker_and_never_opens_enablement(self):
         with mock.patch("workbuddy_pythongo.desktop.probe_worker", return_value={"state": "STOPPED"}), \
-                mock.patch("workbuddy_pythongo.desktop.select_start_mode", side_effect=[("ENABLE_FIRST_TRADE", None), (None, None)]), \
-                mock.patch("workbuddy_pythongo.desktop.run_first_trade_enablement", return_value=0) as wizard, \
-                mock.patch("workbuddy_pythongo.desktop.set_mode") as set_mode, \
-                mock.patch("workbuddy_pythongo.desktop.worker_main") as worker, \
+                mock.patch("workbuddy_pythongo.desktop.select_start_mode", return_value=("OBSERVE_ONLY", None)), \
+                mock.patch("workbuddy_pythongo.desktop.run_first_trade_enablement") as wizard, \
+                mock.patch("workbuddy_pythongo.desktop.set_mode", return_value={}) as set_mode, \
+                mock.patch("workbuddy_pythongo.desktop.worker_main", return_value=0) as worker, \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(start_desktop(self.config_path), 0)
-        wizard.assert_called_once_with(load_config(self.config_path).path)
-        set_mode.assert_not_called()
-        worker.assert_not_called()
+        wizard.assert_not_called()
+        set_mode.assert_called_once_with(load_config(self.config_path).path, "OBSERVE_ONLY", None)
+        worker.assert_called_once()
+        self.assertEqual(self.state()["trade_protection_kind"], "SETUP_LOCK")
+
+    def test_direct_wizard_requires_running_worker_even_with_fresh_stored_heartbeat(self):
+        self.prepare_verified_profile_and_adapter()
+        with mock.patch("workbuddy_pythongo.desktop.probe_worker", return_value={"state": "STOPPED"}), \
+                mock.patch("workbuddy_pythongo.desktop.get_first_trade_enablement") as preflight, \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = run_first_trade_enablement(self.config_path, input_func=lambda _prompt: self.fail("Unexpected confirmation"))
+        self.assertEqual(result, 2)
+        preflight.assert_not_called()
+        self.assertEqual(self.state()["trade_protection_kind"], "SETUP_LOCK")
+
+    def test_running_status_lists_unmet_conditions_without_offering_confirmation(self):
+        self.prepare_verified_profile_and_adapter()
+        with self.database.transaction() as connection:
+            connection.execute("UPDATE heartbeats SET status='STOPPED'")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), \
+                mock.patch("workbuddy_pythongo.desktop.run_first_trade_enablement") as wizard:
+            _offer_first_trade_enablement(self.config_path, self.core.pythongo_health(),
+                                          input_func=lambda _prompt: self.fail("Unexpected confirmation"))
+        self.assertIn("Adapter当前为STOPPED", output.getvalue())
+        self.assertNotIn("保证金策略未同步", output.getvalue())
+        self.assertNotIn("T. ", output.getvalue())
+        wizard.assert_not_called()
+
+    def test_ready_running_status_offers_explicit_confirmation(self):
+        self.prepare_verified_profile_and_adapter()
+
+        def answer(_prompt):
+            return "t"
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), \
+                mock.patch("workbuddy_pythongo.desktop.run_first_trade_enablement") as wizard:
+            _offer_first_trade_enablement(self.config_path, self.core.pythongo_health(), input_func=answer)
+        self.assertIn("T. 确认首次启用交易", output.getvalue())
+        self.assertIn("前置检查已通过", output.getvalue())
+        wizard.assert_called_once_with(self.config_path, answer)
+
+    def test_stopped_status_does_not_offer_t_from_doctor_cached_health(self):
+        self.prepare_verified_profile_and_adapter()
+        health = self.core.pythongo_health()
+        output = io.StringIO()
+        with mock.patch("workbuddy_pythongo.desktop.probe_worker", return_value={"state": "STOPPED"}), \
+                mock.patch("workbuddy_pythongo.desktop.run_doctor", return_value={"health": health}), \
+                mock.patch("workbuddy_pythongo.desktop.print_doctor_human"), \
+                mock.patch("workbuddy_pythongo.desktop.get_first_trade_enablement") as preflight, \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(status_desktop(self.config_path), 1)
+        preflight.assert_not_called()
+        self.assertNotIn("T. ", output.getvalue())
+        self.assertIn("先在启动入口选择1", output.getvalue())
