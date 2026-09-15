@@ -22,6 +22,8 @@ WorkBuddy/MCP 与无限易 PythonGO v2 之间的本机、失败关闭型期货�
 
 0.3.9 重点改善可靠性和开箱体验：恢复崩溃遗留的 `.processing` 命令，确保 `TICK_DISPATCH` 只由目标合约 Tick 触发；熔断或自动暂停时保留严格减仓和撤单；陈旧交易快照拒绝前主动同步；风控同时采用绝对值、账户权益比例、百分比和 Tick 上限；首次配置提供三套风控预设。
 
+PythonGO 桥接与无限易中的 WorkBuddy Adapter 可按任意顺序启动。Worker 自动等待新鲜心跳，并在首次连接或重连后同步账户和持仓；首次使用仍选择 `OBSERVE_ONLY`，交易保护和授权按原有流程处理。更改模式、Profile 或配置后仍需完整重启无限易。
+
 ## 安全模型
 
 - `preview_trade` 与 `submit_trade_intent` 两阶段提交；

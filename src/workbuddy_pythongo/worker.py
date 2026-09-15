@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
 from .config import load_config
+from .connection_sync import AdapterConnectionSync
 from .core import BridgeCore
 from .db import Database
 from .errors import BridgeError
@@ -97,6 +98,7 @@ class RuntimeLoop(threading.Thread):
         self.failed_closed = False
         self.last_lease_at = 0.0
         self.last_maintenance_at = 0.0
+        self.connection_sync = AdapterConnectionSync(core)
 
     @staticmethod
     def _ingest_activity(result):
@@ -116,10 +118,12 @@ class RuntimeLoop(threading.Thread):
                 ingested = self.core.ingester.scan_once()
                 delivered = self.core.dispatch_pending_commands()
                 reconciled = []
+                synced = 0
                 if now - self.last_maintenance_at >= self.maintenance_interval:
+                    synced = self.connection_sync.scan_once(now)
                     reconciled = self.core.reconciler.scan_once()
                     self.last_maintenance_at = now
-                activity = self._ingest_activity(ingested) or bool(delivered) or bool(reconciled)
+                activity = self._ingest_activity(ingested) or bool(delivered) or bool(reconciled) or bool(synced)
             except Exception as exc:
                 print("queue loop error: %s" % exc, file=sys.stderr, flush=True)
                 if not self.failed_closed:
@@ -234,10 +238,8 @@ def main(argv=None):
         mode = row["value"] if row else config.default_mode
     if mode != "OBSERVE_ONLY" and args.confirm_mode != mode:
         raise SystemExit("non-observe Worker startup requires --confirm-mode %s" % mode)
-    reconciliation_accounts = core.reconciler.require_on_startup()
+    core.reconciler.require_on_startup()
     revoke_startup_authorizations(config, database, core)
-    for alias in reconciliation_accounts:
-        core.request_sync(alias, ["ACCOUNT", "POSITION", "ORDER", "TRADE"])
     refresh_simulation_lease(core)
     try:
         with open(config.worker_token_file, "r", encoding="ascii") as stream:

@@ -76,7 +76,7 @@ def make_envelope(keyring, message_type, payload, ttl_seconds, sender, correlati
     return envelope
 
 
-def validate_envelope(envelope, keyring, expected_types=None, max_clock_skew_seconds=5):
+def validate_envelope(envelope, keyring, expected_types=None, max_clock_skew_seconds=5, *, allow_expired_heartbeats=False):
     required = {
         "protocol_version", "message_id", "correlation_id", "message_type",
         "issued_at", "expires_at", "sender", "key_id", "payload", "signature",
@@ -97,11 +97,10 @@ def validate_envelope(envelope, keyring, expected_types=None, max_clock_skew_sec
     except ValueError as exc:
         raise BridgeError("MESSAGE_SCHEMA_INVALID", str(exc))
     now = utc_now()
-    if expires <= now:
-        raise BridgeError("MESSAGE_EXPIRED", "message has expired")
     if issued.timestamp() > now.timestamp() + max_clock_skew_seconds:
         raise BridgeError("CLOCK_SKEW", "message issued_at is in the future")
     if expires <= issued:
         raise BridgeError("MESSAGE_SCHEMA_INVALID", "expires_at must follow issued_at")
+    if expires <= now and not (allow_expired_heartbeats and envelope["message_type"] == "HEARTBEAT"):
+        raise BridgeError("MESSAGE_EXPIRED", "message has expired")
     return envelope
-

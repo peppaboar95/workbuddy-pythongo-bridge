@@ -661,6 +661,7 @@ def run_setup(
         print("     只需要WorkBuddyPythonGOAdapter.py和pythongo_adapter.path；旧JSON请改名备份。")
         print("  3. 启动无限易，并在PythonGO中启动WorkBuddyPythonGOAdapter策略。")
     print("  4. 双击“启动PythonGO桥接.cmd”，直接按Enter使用OBSERVE_ONLY。")
+    print("     Worker和无限易Adapter可按任意顺序启动；双方上线后会自动同步账户和持仓。")
     print("  5. 此时即可使用查询接口；P0、Profile签名和解除交易保护都不是查询前置步骤。")
     print("\n交易功能的启用入口：")
     print("  完成P0验证和Profile签名后，先在启动入口选择1（OBSERVE_ONLY），保持Worker窗口打开。")
@@ -974,7 +975,7 @@ def select_start_mode(availability=None, input_func=input):
             suffix = "  [暂不可用：%s]" % _blocker_summary(blockers) if blockers else ""
             print("  %s. %-13s %s%s" % (selected, mode, START_MODE_DESCRIPTIONS[mode], suffix))
         if any(item.get("kind") == "SETUP_LOCK" for blockers in availability.values() for item in blockers):
-            print("首次交易准备：先选择1启动观察模式并保持窗口打开，再在无限易中启动Adapter。")
+            print("首次交易准备：选择1启动观察模式并保持窗口打开；无限易中的Adapter可先启动或后启动。")
             print("随后另开状态入口；前置检查通过后才会显示T。")
         print("直接按Enter使用安全默认值OBSERVE_ONLY；输入Q可取消启动。")
         selected = input_func("请输入序号 [1]：").strip()
@@ -1042,6 +1043,7 @@ def start_desktop(config_path):
     print("\n本次启动模式：%s" % mode)
     print("ready目录中的Adapter配置已同步。")
     print("无限易通过pythongo_adapter.path直接读取ready配置，无需复制JSON或Profile。")
+    print("Worker和无限易中的Adapter可按任意顺序启动；双方上线后自动同步，离线时自动等待。")
     print("模式或Profile变化后仍必须完整重启无限易，使Adapter重新加载。")
     if mode == "OBSERVE_ONLY":
         print("当前可使用查询、预览和空跑闭环；交易保护状态不会被启动器解除。")

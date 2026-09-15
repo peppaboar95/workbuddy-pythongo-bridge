@@ -1,5 +1,5 @@
 from .errors import BridgeError
-from .util import iso_now, json_text
+from .util import iso_now, json_text, parse_time, utc_now
 
 
 EVENT_TYPES = {
@@ -34,7 +34,8 @@ class EventIngester:
                     adapter, "control_acks", self._handler(account.alias), ACK_TYPES, limit_per_folder
                 ),
                 "events": self.file_queue.consume(
-                    adapter, "events", self._handler(account.alias), EVENT_TYPES, limit_per_folder
+                    adapter, "events", self._handler(account.alias), EVENT_TYPES, limit_per_folder,
+                    allow_expired_heartbeats=True,
                 ),
             }
         return result
@@ -98,6 +99,21 @@ class EventIngester:
         account = self.config.account(payload["account_alias"])
         if payload["adapter_instance"] != account.adapter_instance:
             raise BridgeError("ACCOUNT_BINDING_MISMATCH", "heartbeat adapter_instance mismatch")
+        try:
+            occurred = parse_time(payload["occurred_at"])
+        except ValueError as exc:
+            raise BridgeError("MESSAGE_SCHEMA_INVALID", str(exc))
+        now = utc_now()
+        if occurred.timestamp() > now.timestamp() + 5:
+            raise BridgeError("CLOCK_SKEW", "heartbeat occurred_at is in the future")
+        previous = connection.execute(
+            "SELECT occurred_at FROM heartbeats WHERE adapter_instance=?", (account.adapter_instance,),
+        ).fetchone()
+        if previous and occurred < parse_time(previous["occurred_at"]):
+            return
+        # Legacy gates read received_at. Preserve the actual emission age here;
+        # inbound_events still records transport arrival time for the audit trail.
+        effective_received = min(now, occurred).isoformat(timespec="milliseconds")
         connection.execute(
             """INSERT INTO heartbeats(adapter_instance,account_alias,status,mode,profile_status,occurred_at,received_at,payload_json)
                VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(adapter_instance) DO UPDATE SET
@@ -106,8 +122,8 @@ class EventIngester:
                received_at=excluded.received_at,payload_json=excluded.payload_json""",
             (
                 payload["adapter_instance"], payload["account_alias"], payload["status"],
-                payload.get("mode"), payload.get("profile_status"), payload["occurred_at"],
-                iso_now(), json_text(payload),
+                payload.get("mode"), payload.get("profile_status"), occurred.isoformat(timespec="milliseconds"),
+                effective_received, json_text(payload),
             ),
         )
 

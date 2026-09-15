@@ -255,6 +255,7 @@ class BridgeCore:
                 accounts.append({
                     "account_alias": account.alias,
                     "adapter_instance": account.adapter_instance,
+                    "adapter_session_id": (payload or {}).get("adapter_session_id"),
                     "adapter_status": heartbeat["status"] if heartbeat else "OFFLINE",
                     "heartbeat_age_seconds": heartbeat_age,
                     "adapter_mode": heartbeat["mode"] if heartbeat else None,

@@ -48,13 +48,13 @@ class FileQueue:
         os.replace(source, target)
         return target
 
-    def consume(self, adapter_instance, folder, handler, expected_types=None, limit=100):
+    def consume(self, adapter_instance, folder, handler, expected_types=None, limit=100, *, allow_expired_heartbeats=False):
         if folder not in QUEUE_FOLDERS:
             raise ValueError("invalid queue folder")
         with self._consumer_lock(adapter_instance, folder) as acquired:
             if not acquired:
                 return {"processed": 0, "dead_lettered": 0}
-            return self._consume_locked(adapter_instance, folder, handler, expected_types, limit)
+            return self._consume_locked(adapter_instance, folder, handler, expected_types, limit, allow_expired_heartbeats)
 
     @contextlib.contextmanager
     def _consumer_lock(self, adapter_instance, folder):
@@ -93,7 +93,7 @@ class FileQueue:
             finally:
                 unlock()
 
-    def _consume_locked(self, adapter_instance, folder, handler, expected_types, limit):
+    def _consume_locked(self, adapter_instance, folder, handler, expected_types, limit, allow_expired_heartbeats=False):
         directory = os.path.join(self.ensure_partition(adapter_instance), folder)
         processed = 0
         dead = 0
@@ -108,7 +108,7 @@ class FileQueue:
                     raise BridgeError("MESSAGE_TOO_LARGE", "queue file exceeds size limit")
                 with open(path, "rb") as stream:
                     envelope = json.loads(stream.read().decode("utf-8"))
-                validate_envelope(envelope, self.keyring, expected_types)
+                validate_envelope(envelope, self.keyring, expected_types, allow_expired_heartbeats=allow_expired_heartbeats)
             except Exception:
                 self._move(path, adapter_instance, "dead_letter", ".invalid")
                 dead += 1

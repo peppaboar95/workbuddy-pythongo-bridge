@@ -317,6 +317,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
         self._keys = {}
         self._active_key_id = None
         self._status = "STARTING"
+        self._session_id = uuid.uuid4().hex
         self._profile_status = "UNKNOWN"
         self._profile = None
         self._background_thread = None
@@ -465,12 +466,10 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
     def _ensure_dirs(self):
         for name in QUEUE_FOLDERS:
             path = os.path.join(self._partition, name)
-            if not os.path.isdir(path):
-                os.makedirs(path)
+            os.makedirs(path, exist_ok=True)
         for name in ("execution_journal", "heartbeat"):
             path = os.path.join(self._runtime, name)
-            if not os.path.isdir(path):
-                os.makedirs(path)
+            os.makedirs(path, exist_ok=True)
 
     def _signature(self, message):
         unsigned = dict(message)
@@ -1871,6 +1870,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
             "type": "HEARTBEAT",
             "account_alias": self._config["account_alias"],
             "adapter_instance": self._config["adapter_instance"],
+            "adapter_session_id": self._session_id,
             "status": self._status,
             "mode": self._config["pythongo_mode"],
             "profile_status": self._profile_status,
@@ -1957,6 +1957,7 @@ class WorkBuddyPythonGOAdapter(BaseStrategy):
 
     def on_start(self):
         super().on_start()
+        self._session_id = uuid.uuid4().hex
         try:
             if self._config is None:
                 self._load_config()

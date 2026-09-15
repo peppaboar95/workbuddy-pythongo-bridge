@@ -202,7 +202,16 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 ## 5. 第一次启动：只使用 OBSERVE_ONLY
 
-首次应先启动 Worker，再启动无限易中的 Adapter。
+Worker 与无限易中的 WorkBuddy Adapter 支持两种启动顺序：
+
+| 启动顺序 | 自动处理 |
+| --- | --- |
+| 先启动 PythonGO 桥接，再启动无限易 PythonGO 中的 Adapter | Worker 显示等待 Adapter 上线，收到新鲜心跳后自动同步账户和持仓。 |
+| 先启动无限易 PythonGO 中的 Adapter，再启动 PythonGO 桥接 | Adapter 持续运行并发送心跳；Worker 启动后自动接收心跳并同步账户和持仓。 |
+
+仅打开无限易或登录账号还不够，需要加载并启动 `WorkBuddyPythonGOAdapter` 策略。连接中断后 Worker 自动等待恢复，Adapter 重新上线后重新同步；重启 Worker 也会重新同步。延迟送达的旧心跳不会被当成新连接。
+
+启动顺序兼容以当前模式和保证金策略一致为前提。首次使用选择 `OBSERVE_ONLY`；若在 Adapter 已运行时更改模式、Profile 或配置，仍需完整退出并重启无限易加载变更。自动同步只读取数据，首次安装保护、事故保护、未知报单和交易授权仍按原有规则处理。
 
 ### 5.1 使用桌面入口
 
