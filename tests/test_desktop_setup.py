@@ -3,6 +3,9 @@ import io
 import json
 import os
 import pathlib
+import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -77,7 +80,40 @@ class DesktopSetupTests(unittest.TestCase):
             self.assertIn('"%s" -m workbuddy_pythongo.desktop' % python_executable, launcher)
             self.assertIn('"%s" -m workbuddy_pythongo.manager' % python_executable, launcher)
 
+    @unittest.skipUnless(os.name == "nt", "Requires Windows CMD")
+    def test_status_shortcut_uses_utf8_for_chinese_paths_and_redirected_output(self):
+        with tempfile.TemporaryDirectory(prefix="中文 桥接 ") as root, socket.socket() as reserved_port:
+            initialized = initialize(os.path.join(root, "运行 目录"))
+            config_path = pathlib.Path(initialized["config"])
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            reserved_port.bind(("127.0.0.1", 0))
+            config["port"] = reserved_port.getsockname()[1]
+            config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+            shortcuts = os.path.join(root, "中文 桌面")
+            create_shortcuts(str(config_path), shortcuts, python_executable=sys.executable)
+            status_path = os.path.join(shortcuts, "查看PythonGO桥接状态.cmd")
+            environment = dict(os.environ, PYTHONUTF8="0", PYTHONIOENCODING="gbk")
+            environment["PYTHONPATH"] = str(REPO_ROOT / "src")
+
+            for codepage in (936, 437):
+                with self.subTest(codepage=codepage):
+                    result = subprocess.run(
+                        'cmd.exe /d /s /c "chcp %d >nul & call "%s""' % (codepage, status_path),
+                        input=b"\r\n",
+                        capture_output=True,
+                        env=environment,
+                        timeout=20,
+                    )
+
+                    self.assertEqual(result.returncode, 1, result.stderr.decode("utf-8", errors="replace"))
+                    output = result.stdout.decode("utf-8")
+                    self.assertIn("正在检查桥接状态", output)
+                    self.assertIn(str(config_path), output)
+                    self.assertIn("Worker未启动", output)
+                    self.assertIn("自动配置诊断", output)
+
     def test_installer_keeps_the_original_cmd_wheel_flow(self):
+        self.assertTrue((REPO_ROOT / "install.ps1").read_bytes().startswith(b"\xef\xbb\xbf"))
         installer = (REPO_ROOT / "首次安装与配置.cmd").read_text(encoding="utf-8")
         powershell_installer = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8-sig")
         self.assertTrue(installer.isascii())

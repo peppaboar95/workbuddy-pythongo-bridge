@@ -340,7 +340,11 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
         _cmd_value(python_executable),
         _cmd_value(config_path),
     )
-    prefix = "@echo off\r\nchcp 65001 >nul\r\nsetlocal\r\n"
+    prefix = (
+        "@echo off\r\nchcp 65001 >nul\r\nsetlocal\r\n"
+        'set "PYTHONUTF8=1"\r\n'
+        'set "PYTHONIOENCODING=utf-8"\r\n'
+    )
     scripts = {
         "启动PythonGO桥接.cmd": (
             prefix

@@ -4,6 +4,10 @@ param([switch]$SyntaxCheck)
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
 try {
     [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
