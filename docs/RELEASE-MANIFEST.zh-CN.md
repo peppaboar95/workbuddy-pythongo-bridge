@@ -2,6 +2,8 @@
 
 本发布包用于在另一台 Windows 电脑上安装 WorkBuddy-PythonGO Bridge。安装过程使用包内 wheel，不需要复制开发源码，也不会携带制作电脑的运行数据。
 
+本文件用于核对安装前准备与包内文件，具体操作流程见[操作手册](README-RELEASE.zh-CN.md)。
+
 ## 安装前准备
 
 - Windows 10/11；

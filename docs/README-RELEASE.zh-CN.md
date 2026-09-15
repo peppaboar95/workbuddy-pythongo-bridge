@@ -4,6 +4,30 @@
 
 > 默认模式是 `OBSERVE_ONLY`。模式名称不能证明当前柜台是模拟还是实盘；所有非观察模式都可能向当前登录柜台提交真实报单。
 
+## 阅读顺序
+
+- **第一次使用查询**：先完成[安装](#install)、[Adapter 部署](#adapter)和[观察模式启动](#observe)，无需先启用交易。
+- **准备使用交易**：完成[现场验证、签名与保护解除](#p0)，再[选择运行模式](#modes)；策略自动交易继续阅读 [LIMITED_AUTO 流程](#limited-auto)。
+- **已有运行环境**：查看[日常启动与停止](#daily)；异常时直接查[常见问题](#faq)。
+
+## 章节导航
+
+1. [组件与状态](#components)
+2. [命令使用的路径](#paths)
+3. [首次安装与配置](#install)
+4. [部署 PythonGO Adapter](#adapter)
+5. [第一次启动：观察模式](#observe)
+6. [交易准备：P0、Profile 和保护解除](#p0)
+7. [切换运行模式](#modes)
+8. [进入 LIMITED_AUTO](#limited-auto)
+9. [日常启动与停止](#daily)
+10. [常见问题与处理](#faq)
+11. [WorkBuddy MCP](#mcp)
+12. [支持范围和安全边界](#boundaries)
+13. [开发验证](#development)
+
+<a id="components"></a>
+
 ## 1. 先理解四个组件
 
 | 组件 | 在哪里运行 | 作用 |
@@ -25,6 +49,8 @@
 
 只有模式没有许可，仍然不能自动报单。
 
+<a id="paths"></a>
+
 ## 2. 本文命令使用的路径
 
 发布包默认把运行目录固定到 `%LOCALAPPDATA%\WorkBuddyPythonGO\runtime`，因此换一个目录解压新版 ZIP 也不会生成第二套密钥和配置。下面的命令先读取这个默认位置：
@@ -42,6 +68,8 @@ $BridgeRoot = "C:\WorkBuddyPythonGO\runtime"
 ```
 
 本文优先使用 `python -m ...`，避免 Windows 用户级脚本目录没有加入 `PATH`。如果安装时使用的是 Python Launcher，也可以把 `python` 换成 `py -3`。
+
+<a id="install"></a>
 
 ## 3. 首次安装与配置
 
@@ -149,6 +177,8 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 本地表不是券商结算参数。用于开仓估算时，按参考策略的方式使用“保证金-每手 × 手数”，再乘默认 `1.25` 安全系数；买/卖保证金比例仍保留在风险指纹中供审计。CSV 中的开仓、平昨、平今手续费列会完整保留，实际手续费仍以无限易账户快照的 `commission` 为准，第三方数值不用于放宽任何风控。九期网数据不能替代券商或交易所正式通知。
 
+<a id="adapter"></a>
+
 ## 4. 部署 PythonGO Adapter
 
 首次配置向导会搜索常见无限易安装位置。选择正确的 `pyStrategy\self_strategy` 后，向导仅部署两个必要文件；同名旧文件先备份为 `.bak.<时间戳>`，旧的 `pythongo_adapter.json` 和 `pythongo_profile.json` 也只会改名保留，不会直接删除。若自动发现失败或当时跳过，再按下面步骤手工操作。
@@ -167,6 +197,8 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 配置、Profile 和模式变化时无需再复制 JSON，但 Adapter 只在初始化时加载它们，仍应完整退出并重启无限易。覆盖 Python 文件后只停止并重新运行策略可能继续使用旧模块缓存，源码更新同样必须完整重启。
 
 升级到 v0.3.9 时优先重新运行 CMD 安装器；向导会部署支持 `.processing` 恢复、目标合约 Tick 派发和减仓保护的新 Adapter，并保留已有 runtime 与风控配置。完整退出并重启无限易后，新 Adapter 才会加载。若保证金策略结果显示 `material_change=true`，应保持 `POLICY_REVIEW` 保护，复核新策略和开仓 Preview 后再解除；Profile 保持原样，无需仅因这次升级重新签名。只有无限易、PythonGO、柜台、账号、交易映射或 Profile 本身的绑定证据变化时，才重新执行相应 P0 并重签。
+
+<a id="observe"></a>
 
 ## 5. 第一次启动：只使用 OBSERVE_ONLY
 
@@ -210,6 +242,8 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig doctor
 - 心跳中的 `profile_status=VALID`：正在运行的无限易 Adapter 已经加载并接受该 Profile。
 
 如果文件已签名但心跳仍是 `UNVERIFIED`，说明无限易仍在运行旧模块或未重新加载 ready 内容；确认定位文件后完整重启无限易，无需复制 JSON 或 Profile。
+
+<a id="p0"></a>
 
 ## 6. 需要交易时：完成 P0、签名 Profile 和解除交易保护
 
@@ -325,6 +359,8 @@ python -m workbuddy_pythongo.console --config $BridgeConfig clear-halt --confirm
 
 解除熔断会强制回到 `OBSERVE_ONLY`，并撤销旧批准、人工会话和自动许可。重新加载 Adapter 后，再完成一次观察模式同步和对账。
 
+<a id="modes"></a>
+
 ## 7. 切换运行模式
 
 ### 7.1 桌面菜单的三个输入阶段
@@ -371,6 +407,8 @@ python -m workbuddy_pythongo.worker --config $BridgeConfig --confirm-mode LIMITE
 | `SIM_SIGNAL` | 会 | 已验证的目标模拟柜台和签名 Profile |
 | `MANUAL_LIVE` | 会 | 每笔批准或 1–60 分钟人工会话 |
 | `LIMITED_AUTO` | 会 | readiness 通过且存在有效结构化许可 |
+
+<a id="limited-auto"></a>
 
 ## 8. 进入 LIMITED_AUTO
 
@@ -512,6 +550,8 @@ remaining_notional>0
 
 因此，每次完整重启后都应重新同步、检查 readiness，再创建新许可。
 
+<a id="daily"></a>
+
 ## 9. 日常启动与停止
 
 ### 9.1 日常启动
@@ -547,6 +587,8 @@ WorkBuddy 也可以调用 `halt_trading`。只有本机 Console 能解除熔断�
 `LIMITED_AUTO` 的瞬态异常使用 `PAUSE_NEW_OPEN`：暂停新的开仓，但保留同样严格的减仓和撤单。健康状态会返回 `READY`、`PAUSE_NEW_OPEN` 或 `RISK_REDUCING_ONLY`，便于界面直接告诉用户还能做什么。
 
 普通交易 Preview 使用更短的资金/持仓与行情时效。若发现缺失或陈旧，Worker 会先自动发起一次 `purpose=TRADE` 的资金、持仓和行情同步；交易热路径不会请求 K 线。同步后仍不新鲜才返回对应风险原因。
+
+<a id="faq"></a>
 
 ## 10. 常见问题与处理
 
@@ -605,6 +647,8 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig set-mode OBSERVE_ONL
 
 这是正常行为。Worker 重启会撤销旧许可。重新同步、检查 readiness，并在操作者再次确认范围后签发新许可。
 
+<a id="mcp"></a>
+
 ## 11. WorkBuddy MCP
 
 首次向导可以自动把 `workbuddy-pythongo` 合并进 WorkBuddy MCP 配置，并保留其他 MCP 服务。也可以参考运行目录中的：
@@ -634,6 +678,8 @@ pythongo_health
 
 其中 `submit_trade_intent` 返回的是异步受理状态。`QUEUED` 只表示 Bridge 已可靠接收并投递；`native_send_returned`、`broker_acknowledged` 和 `terminal` 分别表示原生报单调用已有确定返回、已收到柜台委托事实和已进入终态。未终态时按返回的 `poll_after_ms` 查询，不要长时间占用一次 MCP 调用等待成交。
 
+<a id="boundaries"></a>
+
 ## 12. 支持范围和安全边界
 
 - 当前只支持期货、投机、固定手数、GFD 固定限价；
@@ -646,6 +692,8 @@ pythongo_health
 - 无限易、PythonGO、柜台、账号、策略代码或枚举发生变化时，必须重新执行相应 P0 并重签 Profile。
 
 完整架构、威胁模型和 P0/P1 验证范围见 [设计文档](DESIGN.zh-CN.md)。
+
+<a id="development"></a>
 
 ## 13. 开发验证
 

@@ -4,6 +4,8 @@
 
 0.3.9 是面向开箱使用、队列恢复和自适应风控的正式版本。它保持 31 个 Bridge 方法和现有安装方式兼容，不降低 Worker 与 Adapter 的双端校验边界。
 
+本文记录本版本发布时的变化；当前安装、交易启用和排障步骤请阅读[操作手册](README-RELEASE.zh-CN.md)。
+
 ## 主要变化
 
 - Adapter 重启后恢复崩溃遗留的 `.json.processing-*` 命令，并继续使用执行日记区分安全重试与 `SUBMIT_UNKNOWN`；

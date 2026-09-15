@@ -5,6 +5,8 @@
 > 适用范围：Windows、Tencent WorkBuddy、无限易客户端、PythonGO v2、期货行情监控及模拟/实盘交易  
 > 风险声明：本文描述交易基础设施，不构成投资建议。任何实盘能力必须经过只读、空跑、模拟、人工确认和小额灰度验证。
 
+本文用于理解组件职责、协议与安全边界。安装、启动、交易启用和故障处理请先阅读[操作手册](README-RELEASE.zh-CN.md)。
+
 ## 1. 文档目的
 
 建设一个受控的 **WorkBuddy–InfiniTrader PythonGO Bridge**，使 WorkBuddy 可以通过 MCP：

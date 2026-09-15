@@ -101,6 +101,8 @@ python -m workbuddy_pythongo.desktop setup --root .\runtime
 
 ## 文档
 
+从[文档导航](docs/README.md)按安装查询、交易准备、排障或开发目标选择阅读入口。
+
 - [Python 接口参考（单文件 HTML）](https://peppaboar95.github.io/workbuddy-pythongo-bridge/python-api-reference.html) — 31 个 Bridge 方法的参数、响应、错误码、配额与模块 API
 - [中文操作手册](docs/README-RELEASE.zh-CN.md)
 - [设计与安全边界](docs/DESIGN.zh-CN.md)
