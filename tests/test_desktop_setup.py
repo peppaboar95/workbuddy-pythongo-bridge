@@ -76,9 +76,12 @@ class DesktopSetupTests(unittest.TestCase):
             launcher_path = pathlib.Path(shortcuts, "启动PythonGO桥接.cmd")
             launcher_bytes = launcher_path.read_bytes()
             self.assertTrue(launcher_bytes.startswith(b"@echo off\r\nchcp 65001 >nul\r\n"))
-            launcher = launcher_bytes.decode("utf-8")
-            self.assertIn('"%s" -m workbuddy_pythongo.desktop' % python_executable, launcher)
-            self.assertIn('"%s" -m workbuddy_pythongo.manager' % python_executable, launcher)
+            self.assertTrue(launcher_bytes.isascii())
+            launcher = pathlib.Path(shortcuts, "workbuddy-pythongo-start.ps1").read_bytes()
+            self.assertTrue(launcher.startswith(b"\xef\xbb\xbf"))
+            launcher = launcher.decode("utf-8-sig")
+            self.assertIn("& '%s' -m workbuddy_pythongo.desktop" % python_executable, launcher)
+            self.assertIn("& '%s' -m workbuddy_pythongo.manager" % python_executable, launcher)
 
     @unittest.skipUnless(os.name == "nt", "Requires Windows CMD")
     def test_status_shortcut_uses_utf8_for_chinese_paths_and_redirected_output(self):

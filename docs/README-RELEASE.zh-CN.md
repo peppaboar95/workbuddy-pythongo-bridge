@@ -76,7 +76,7 @@ $BridgeRoot = "C:\WorkBuddyPythonGO\runtime"
 
 安装窗口无论成功或失败都会停留在“按任意键关闭”，不会立即消失。失败时保留窗口中的第一条明确错误。
 
-若旧桌面入口仍显示中文乱码，重新运行本版本安装器并选择创建桌面入口即可更新。新入口统一使用 UTF-8，支持中文路径，并覆盖继承的 Python 输入输出编码设置。
+若旧桌面入口仍显示中文乱码，或提示中文文本“不是内部或外部命令”，重新运行本版本安装器并选择创建桌面入口即可更新。新 `.cmd` 入口只包含 ASCII，中文提示和路径由带 UTF-8 BOM 的 PowerShell 脚本处理，并统一 Python 输入输出编码。移动入口时，请同时移动同目录的 `workbuddy-pythongo-start.ps1` 和 `workbuddy-pythongo-status.ps1`。
 
 ### 3.2 源码安装
 

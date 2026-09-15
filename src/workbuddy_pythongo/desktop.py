@@ -215,8 +215,8 @@ def _desktop_dir():
     return os.path.join(os.path.expanduser("~"), "Desktop")
 
 
-def _cmd_value(value):
-    return str(value).replace("%", "%%").replace('"', '""')
+def _powershell_literal(value):
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def _write_changed(path, data):
@@ -332,71 +332,103 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
     target_dir = os.path.abspath(target_dir or _desktop_dir())
     python_executable = os.path.abspath(python_executable or sys.executable)
     os.makedirs(target_dir, exist_ok=True)
-    command = '"%s" -m workbuddy_pythongo.desktop --config "%s"' % (
-        _cmd_value(python_executable),
-        _cmd_value(config_path),
+    command = "& %s -m workbuddy_pythongo.desktop --config %s" % (
+        _powershell_literal(python_executable),
+        _powershell_literal(config_path),
     )
-    manager_command = '"%s" -m workbuddy_pythongo.manager --config "%s"' % (
-        _cmd_value(python_executable),
-        _cmd_value(config_path),
+    manager_command = "& %s -m workbuddy_pythongo.manager --config %s" % (
+        _powershell_literal(python_executable),
+        _powershell_literal(config_path),
     )
-    prefix = (
-        "@echo off\r\nchcp 65001 >nul\r\nsetlocal\r\n"
+    batch_prefix = (
+        "@echo off\r\nchcp 65001 >nul\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n"
         'set "PYTHONUTF8=1"\r\n'
         'set "PYTHONIOENCODING=utf-8"\r\n'
     )
-    scripts = {
-        "启动PythonGO桥接.cmd": (
-            prefix
-            + "title WorkBuddy PythonGO 桥接启动器\r\n"
-            + "echo 请先选择Worker运行模式，随后桥接服务会在当前窗口启动。\r\n"
-            + "echo 在模式提示处直接按Enter，将使用安全的OBSERVE_ONLY默认值。\r\n"
-            + "echo Worker运行期间请保持此窗口打开。\r\n"
-            + "echo.\r\n"
-            + manager_command
-            + " refresh-margin-reference --if-due >nul 2>&1\r\n"
-            + "set \"MARGIN_REFRESH_EXIT=%ERRORLEVEL%\"\r\n"
-            + "if \"%MARGIN_REFRESH_EXIT%\"==\"3\" goto margin_policy_migration_required\r\n"
-            + "if not \"%MARGIN_REFRESH_EXIT%\"==\"0\" echo [警告] 保证金参考刷新失败；若无限易也未提供比例，开仓会继续安全拒绝。\r\n"
-            + "echo.\r\n"
-            + command
-            + " start\r\n"
-            + "set \"EXIT_CODE=%ERRORLEVEL%\"\r\n"
-            + "echo.\r\n"
-            + "if not \"%EXIT_CODE%\"==\"0\" echo 桥接服务未正常退出，请双击“查看PythonGO桥接状态.cmd”自动诊断。\r\n"
-            + "pause\r\n"
-            + "exit /b %EXIT_CODE%\r\n"
-            + ":margin_policy_migration_required\r\n"
-            + "echo.\r\n"
-            + "echo [需要复核] 保证金策略发生实质变化，交易暂不启用；查询仍可使用。\r\n"
-            + "echo 请运行下面的命令并核对结果，然后重新启动桥接：\r\n"
-            + "echo.\r\n"
-            + "echo "
-            + manager_command
-            + " migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY\r\n"
-            + "echo.\r\n"
-            + "echo 实质策略变化会保留Profile签名，但交易会保持保护状态，直到完成复核。\r\n"
-            + "pause\r\n"
-            + "exit /b 3\r\n"
-        ),
-        "查看PythonGO桥接状态.cmd": (
-            prefix
-            + "title WorkBuddy PythonGO 桥接状态\r\n"
-            + "echo 正在检查桥接状态……\r\n"
-            + "echo 仅在状态异常时自动运行详细诊断。\r\n"
-            + "echo.\r\n"
-            + command
-            + " status\r\n"
-            + "set \"EXIT_CODE=%ERRORLEVEL%\"\r\n"
-            + "echo.\r\n"
-            + "pause\r\n"
-            + "exit /b %EXIT_CODE%\r\n"
-        ),
+    powershell_prefix = [
+        '$ErrorActionPreference = "Stop"',
+        '$env:PYTHONUTF8 = "1"',
+        '$env:PYTHONIOENCODING = "utf-8"',
+        '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+        'try {',
+        '    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)',
+        '    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+        '} catch {}',
+        'function Wait-ForLauncherKey {',
+        '    Write-Host ""',
+        '    Write-Host "按任意键关闭本窗口……"',
+        '    try {',
+        '        if (-not [Console]::IsInputRedirected) { $null = [Console]::ReadKey($true) }',
+        '    } catch {}',
+        '}',
+        '$launcherExitCode = 0',
+        'try {',
+    ]
+    powershell_suffix = [
+        '} catch {',
+        '    Write-Host "[错误] 桌面入口运行失败：$($_.Exception.Message)" -ForegroundColor Red',
+        '    $launcherExitCode = 2',
+        '} finally {',
+        '    Wait-ForLauncherKey',
+        '}',
+        'exit $launcherExitCode',
+    ]
+    migration_command = manager_command + " migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY"
+    bodies = {
+        "workbuddy-pythongo-start.ps1": [
+            '    try { $Host.UI.RawUI.WindowTitle = "WorkBuddy PythonGO 桥接启动器" } catch {}',
+            '    Write-Host "请先选择Worker运行模式，随后桥接服务会在当前窗口启动。"',
+            '    Write-Host "在模式提示处直接按Enter，将使用安全的OBSERVE_ONLY默认值。"',
+            '    Write-Host "Worker运行期间请保持此窗口打开。"',
+            '    Write-Host ""',
+            '    function Invoke-MarginRefresh {',
+            '        $ErrorActionPreference = "Continue"',
+            '        ' + manager_command + ' refresh-margin-reference --if-due 1>$null 2>$null',
+            '        return $LASTEXITCODE',
+            '    }',
+            '    $marginRefreshExit = Invoke-MarginRefresh',
+            '    if ($marginRefreshExit -eq 3) {',
+            '        Write-Host "[需要复核] 保证金策略发生实质变化，交易暂不启用；查询仍可使用。"',
+            '        Write-Host "请在PowerShell中运行下面的命令并核对结果，然后重新启动桥接："',
+            '        Write-Host ' + _powershell_literal(migration_command),
+            '        Write-Host "实质策略变化会保留Profile签名，但交易会保持保护状态，直到完成复核。"',
+            '        $launcherExitCode = 3',
+            '    } else {',
+            '        if ($marginRefreshExit -ne 0) {',
+            '            Write-Host "[警告] 保证金参考刷新失败；若无限易也未提供比例，开仓会继续安全拒绝。"',
+            '        }',
+            '        Write-Host ""',
+            '        ' + command + ' start',
+            '        $launcherExitCode = $LASTEXITCODE',
+            '        if ($launcherExitCode -ne 0) {',
+            "            Write-Host '桥接服务未正常退出，请双击“查看PythonGO桥接状态.cmd”自动诊断。'",
+            '        }',
+            '    }',
+        ],
+        "workbuddy-pythongo-status.ps1": [
+            '    try { $Host.UI.RawUI.WindowTitle = "WorkBuddy PythonGO 桥接状态" } catch {}',
+            '    Write-Host "正在检查桥接状态……"',
+            '    Write-Host "仅在状态异常时自动运行详细诊断。"',
+            '    Write-Host ""',
+            '    ' + command + ' status',
+            '    $launcherExitCode = $LASTEXITCODE',
+        ],
     }
     results = []
-    for name, content in scripts.items():
-        encoded = content.encode("utf-8")
-        results.append(_write_changed(os.path.join(target_dir, name), encoded))
+    for name, body in bodies.items():
+        content = "\r\n".join(powershell_prefix + body + powershell_suffix) + "\r\n"
+        results.append(_write_changed(os.path.join(target_dir, name), content.encode("utf-8-sig")))
+    for name, companion in (
+        ("启动PythonGO桥接.cmd", "workbuddy-pythongo-start.ps1"),
+        ("查看PythonGO桥接状态.cmd", "workbuddy-pythongo-status.ps1"),
+    ):
+        content = (
+            batch_prefix
+            + 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0'
+            + companion
+            + '"\r\nexit /b %ERRORLEVEL%\r\n'
+        )
+        results.append(_write_changed(os.path.join(target_dir, name), content.encode("ascii")))
     retired = _retire_obsolete_shortcut(os.path.join(target_dir, "更新PythonGO保证金数据.cmd"))
     return {"directory": target_dir, "scripts": results, "retired": retired}
 
