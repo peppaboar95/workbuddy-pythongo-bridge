@@ -11,7 +11,10 @@ import sys
 
 from .bootstrap import RISK_PRESETS, initialize
 from .config import load_config
-from .console import bind_investor, get_non_observe_mode_blockers, set_mode
+from .console import (
+    bind_investor, enable_first_trade, get_first_trade_enablement,
+    get_non_observe_mode_blockers, set_mode,
+)
 from .doctor import run_doctor
 from .errors import BridgeError
 from .margin_reference import migrate_margin_policy_if_safe
@@ -659,7 +662,12 @@ def run_setup(
         print("  3. 启动无限易，并在PythonGO中启动WorkBuddyPythonGOAdapter策略。")
     print("  4. 双击“启动PythonGO桥接.cmd”，直接按Enter使用OBSERVE_ONLY。")
     print("  5. 此时即可使用查询接口；P0、Profile签名和解除交易保护都不是查询前置步骤。")
-    print("以后需要交易时：再按文档执行一次性P0验证、签名Profile并选择交易模式。")
+    print("\n交易功能的启用入口：")
+    print("  双击“启动PythonGO桥接.cmd”，输入T进入“首次启用交易”向导。")
+    print("  向导会检查P0/Profile和Adapter加载状态，明确列出尚未完成的步骤。")
+    print("  完成P0验证和Profile签名后，以OBSERVE_ONLY运行Worker和Adapter并完成同步、对账。")
+    print("  再打开启动或状态入口，输入T；检查通过并明确确认后才能解除首次安装保护。")
+    print("  解除后仍保持OBSERVE_ONLY，再按提示选择交易模式和配置交易授权。")
     print("日常启动只使用“启动PythonGO桥接.cmd”，无需重复安装。")
     print("\n配置向导不会自动启动Worker、无限易或WorkBuddy。")
     return {
@@ -880,9 +888,65 @@ def _blocker_summary(blockers):
     labels = {
         "PROFILE_INVALID": "P0 Profile未验证或绑定不完整",
         "TRADING_HALTED": "交易保护尚未解除",
-        "TRADE_PROTECTION_ACTIVE": "交易功能尚未启用或仍需复核",
+        "TRADE_PROTECTION_ACTIVE": "交易保护已开启，需本机复核",
     }
-    return "；".join(labels.get(item.get("code"), item.get("message", "门禁未通过")) for item in blockers)
+    protection_labels = {
+        "SETUP_LOCK": "首次交易尚未启用：输入T进入启用向导",
+        "ACCOUNT_CHANGE": "账号变更保护：需复核账号和Profile",
+        "POLICY_REVIEW": "保证金策略变更：需先完成策略复核",
+        "INCIDENT_HALT": "事故保护：需复核并对账后本机解除",
+    }
+    messages = []
+    for item in blockers:
+        message = labels.get(item.get("code"), item.get("message", "门禁未通过"))
+        if item.get("code") in {"TRADE_PROTECTION_ACTIVE", "TRADING_HALTED"}:
+            message = protection_labels.get(item.get("kind"), message)
+        messages.append(message)
+    return "；".join(messages)
+
+
+def run_first_trade_enablement(config_path, input_func=input):
+    _header("首次启用交易")
+    print("当前配置：%s" % os.path.abspath(config_path))
+    state = get_first_trade_enablement(config_path)
+    if state["kind"] == "NONE":
+        print("当前没有首次安装保护；交易仍需完成P0/Profile验证、选择运行模式并配置相应授权。")
+        return 0
+    if not state["can_enable"]:
+        print("尚不能解除首次安装保护，请完成以下步骤：")
+        for blocker in state["blockers"]:
+            print("  - %s" % blocker["message"])
+        print("P0现场核对和Profile签名流程见README-RELEASE.zh-CN.md第6章。")
+        print("以观察模式运行后，可再次打开启动或状态入口，输入T重新检查。")
+        return 2
+    print("检查通过：首次安装保护、观察模式、Profile校验及Adapter加载状态均满足要求。")
+    print("请确认P0证据来自当前电脑、账号和柜台，并已完成观察模式同步和对账。")
+    print("本操作只解除首次安装保护，仍保持OBSERVE_ONLY，并撤销旧交易授权。")
+    confirm = input_func("完整输入ENABLE-FIRST-TRADE确认；直接按Enter取消：").strip()
+    if confirm != "ENABLE-FIRST-TRADE":
+        print("已取消，首次安装保护保持开启。")
+        return 0
+    try:
+        enable_first_trade(config_path, confirm)
+    except BridgeError as exc:
+        print("检查状态已变化，首次启用未完成：")
+        for blocker in (exc.details or {}).get("blockers", []):
+            print("  - %s" % blocker["message"])
+        if not (exc.details or {}).get("blockers"):
+            print("  - %s" % exc.message)
+        return 2
+    print("首次安装保护已解除，当前仍为OBSERVE_ONLY。")
+    print("重新加载Adapter，完成观察模式同步和对账，再停止Worker和Adapter。")
+    print("重新打开启动入口选择交易模式；LIMITED_AUTO还需要有效的结构化策略许可。")
+    return 0
+
+
+def _offer_first_trade_enablement(config_path, health, input_func=input):
+    if (health.get("trade_protection") or {}).get("kind") != "SETUP_LOCK":
+        return
+    print("\nT. 首次启用交易（检查P0/Profile并解除首次安装保护）")
+    if input_func("输入T进入启用向导；直接按Enter结束状态查看：").strip().lower() == "t":
+        run_first_trade_enablement(config_path, input_func)
 
 
 def select_start_mode(availability=None, input_func=input):
@@ -893,22 +957,27 @@ def select_start_mode(availability=None, input_func=input):
             blockers = availability.get(mode) or []
             suffix = "  [暂不可用：%s]" % _blocker_summary(blockers) if blockers else ""
             print("  %s. %-13s %s%s" % (selected, mode, START_MODE_DESCRIPTIONS[mode], suffix))
+        print("  T. 首次启用交易（检查P0/Profile并解除首次安装保护）")
         print("直接按Enter使用安全默认值OBSERVE_ONLY；输入Q可取消启动。")
         selected = input_func("请输入序号 [1]：").strip()
         if selected.lower() == "q":
             return None, None
+        if selected.lower() == "t":
+            return "ENABLE_FIRST_TRADE", None
         mode = START_MODE_SELECTIONS.get(selected or "1")
         if mode is None:
-            print("\n输入无效：请输入1、2、3、4，或直接按Enter。\n")
+            print("\n输入无效：请输入1、2、3、4、T，或直接按Enter。\n")
             continue
         blockers = availability.get(mode) or []
         if blockers:
-            print("\n%s当前暂不可用，安全门禁没有被绕过：" % mode)
+            print("\n%s当前暂不可用，请先完成以下步骤：" % mode)
             for blocker in blockers:
                 print("  - %s" % _blocker_summary([blocker]))
-            action = input_func("按Enter返回模式菜单；输入Q取消启动：").strip().lower()
+            action = input_func("输入T进入首次启用向导；按Enter返回菜单；输入Q取消启动：").strip().lower()
             if action == "q":
                 return None, None
+            if action == "t":
+                return "ENABLE_FIRST_TRADE", None
             print("")
             continue
         confirm = None
@@ -927,6 +996,7 @@ def start_desktop(config_path):
     if probe["state"] == "RUNNING":
         issues = _status_issues(probe)
         print_status_human(config.path, probe, issues)
+        _offer_first_trade_enablement(config.path, (probe.get("response") or {}).get("data") or {})
         print("\n无需重复启动：现有Worker将继续运行。")
         return 0
     if probe["state"] == "CONFLICT":
@@ -938,6 +1008,9 @@ def start_desktop(config_path):
         if mode is None:
             print("\n已取消启动；配置、模式和熔断状态均未改变。")
             return 0
+        if mode == "ENABLE_FIRST_TRADE":
+            run_first_trade_enablement(config.path)
+            continue
         try:
             changed = set_mode(config.path, mode, confirm)
             break
@@ -947,10 +1020,12 @@ def start_desktop(config_path):
             }:
                 raise
             print("\n%s启动前的安全状态已经变化：%s" % (mode, exc.message))
-            action = input("按Enter重新检查并返回模式菜单；输入Q取消启动：").strip().lower()
+            action = input("输入T进入首次启用向导；按Enter重新检查；输入Q取消启动：").strip().lower()
             if action == "q":
                 print("\n已取消启动；安全门禁没有被绕过。")
                 return 0
+            if action == "t":
+                run_first_trade_enablement(config.path)
     print("\n本次启动模式：%s" % mode)
     print("ready目录中的Adapter配置已同步。")
     print("无限易通过pythongo_adapter.path直接读取ready配置，无需复制JSON或Profile。")
@@ -977,13 +1052,17 @@ def status_desktop(config_path):
     probe = probe_worker(config.path)
     issues = _status_issues(probe)
     print_status_human(config.path, probe, issues)
+    health = (probe.get("response") or {}).get("data") or {}
     if issues:
         print("\n" + "-" * 60)
         print("检测到状态异常，正在自动运行doctor……")
         print("-" * 60 + "\n")
-        print_doctor_human(run_doctor(config.path))
+        report = run_doctor(config.path)
+        print_doctor_human(report)
+        _offer_first_trade_enablement(config.path, report.get("health") or health)
         return 1
     print("\n状态正常，无需执行额外诊断。")
+    _offer_first_trade_enablement(config.path, health)
     return 0
 
 
@@ -998,6 +1077,7 @@ def build_parser():
     setup.add_argument("--risk-preset", choices=sorted(RISK_PRESETS), help="仅新runtime使用；省略时交互选择")
     sub.add_parser("start", help="交互选择模式并在当前窗口启动Worker")
     sub.add_parser("status", help="检查实时状态，异常时自动运行doctor")
+    sub.add_parser("enable-trading", help="交互检查并解除首次安装交易保护")
     shortcuts = sub.add_parser("create-shortcuts", help="创建桌面启动和状态脚本")
     shortcuts.add_argument("--target-dir")
     return parser
@@ -1018,6 +1098,8 @@ def main(argv=None):
             return start_desktop(args.config)
         if args.command == "status":
             return status_desktop(args.config)
+        if args.command == "enable-trading":
+            return run_first_trade_enablement(args.config)
         result = create_shortcuts(args.config, target_dir=args.target_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

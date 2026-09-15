@@ -45,6 +45,8 @@ class DesktopSetupTests(unittest.TestCase):
             self.assertIn("不是密码", text)
             self.assertIn("明文显示", text)
             self.assertIn("都不是查询前置步骤", text)
+            self.assertIn("交易功能的启用入口", text)
+            self.assertIn("输入T", text)
             adapter_path = os.path.join(result["ready_dir"], "pythongo_adapter.json")
             with open(adapter_path, "r", encoding="utf-8") as stream:
                 adapter = json.load(stream)

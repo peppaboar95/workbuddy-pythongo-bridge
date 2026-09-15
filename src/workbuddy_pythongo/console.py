@@ -152,11 +152,13 @@ def get_non_observe_mode_blockers(config_path):
     if halted and halted["value"] == "true":
         blockers.append({
             "code": "TRADING_HALTED",
+            "kind": protection_kind["value"] if protection_kind and protection_kind["value"] != "NONE" else "INCIDENT_HALT",
             "message": (halt_reason["value"] if halt_reason else "") or "local halt is active",
         })
     elif protection_kind and protection_kind["value"] != "NONE":
         blockers.append({
             "code": "TRADE_PROTECTION_ACTIVE",
+            "kind": protection_kind["value"],
             "message": (protection_reason["value"] if protection_reason else "") or protection_kind["value"],
         })
     return blockers
@@ -207,12 +209,86 @@ def set_mode(config_path, mode, confirm=None):
     return {"mode": mode, "adapter_configs": changed, "authorization_revoked": True}
 
 
-def clear_halt(config_path, confirm):
+def _first_trade_blockers(config, connection, health):
+    state = dict(connection.execute(
+        "SELECT key,value FROM system_state WHERE key IN ('mode','halted','trade_protection_kind')"
+    ).fetchall())
+    blockers = []
+    if state.get("trade_protection_kind") != "SETUP_LOCK" or state.get("halted") == "true":
+        return [{
+            "code": "PROTECTION_REVIEW_REQUIRED",
+            "message": "此入口只解除首次安装保护；账号变更、策略复核或事故保护需按文档处理。",
+        }]
+    if state.get("mode", config.default_mode) != "OBSERVE_ONLY":
+        blockers.append({"code": "MODE_MISMATCH", "message": "先以OBSERVE_ONLY运行并完成同步和对账。"})
+    try:
+        _require_verified_profiles(config)
+    except Exception:
+        blockers.append({
+            "code": "PROFILE_INVALID",
+            "message": "先完成P0现场验证和Profile签名；签名、账号及客户端绑定必须全部通过。",
+        })
+    accounts = health.get("accounts") or []
+    if not accounts:
+        blockers.append({"code": "ACCOUNT_MISSING", "message": "请先配置并绑定至少一个启用的账号。"})
+    for item in accounts:
+        alias = item["account_alias"]
+        if not item.get("observation_ready") or item.get("adapter_mode") != "OBSERVE_ONLY":
+            blockers.append({
+                "code": "ADAPTER_NOT_READY",
+                "message": "%s：先以观察模式运行Worker和Adapter，确保心跳新鲜、模式及保证金策略同步。" % alias,
+            })
+        if item.get("profile_status") != "VALID":
+            blockers.append({
+                "code": "ADAPTER_PROFILE_INVALID",
+                "message": "%s：完整重启无限易并加载签名Profile，确认Adapter状态为VALID。" % alias,
+            })
+    if health.get("unresolved_submit_unknown"):
+        blockers.append({
+            "code": "RECONCILIATION_REQUIRED",
+            "message": "存在结果未知的报单，先完成人工对账。",
+        })
+    return blockers
+
+
+def get_first_trade_enablement(config_path):
+    config, database, core = build_runtime(config_path)
+    health = core.pythongo_health()
+    with database.connect() as connection:
+        kind = connection.execute(
+            "SELECT value FROM system_state WHERE key='trade_protection_kind'"
+        ).fetchone()
+        blockers = _first_trade_blockers(config, connection, health)
+    return {
+        "kind": (health.get("trade_protection") or {}).get("kind") or (kind["value"] if kind else "NONE"),
+        "can_enable": not blockers,
+        "blockers": blockers,
+    }
+
+
+def enable_first_trade(config_path, confirm):
+    if confirm != "ENABLE-FIRST-TRADE":
+        raise BridgeError("CONFIRMATION_REQUIRED", "--confirm must exactly equal ENABLE-FIRST-TRADE")
+    return clear_halt(config_path, "CLEAR-HALT", first_trade_only=True)
+
+
+def clear_halt(config_path, confirm, *, first_trade_only=False):
     if confirm != "CLEAR-HALT":
         raise BridgeError("CONFIRMATION_REQUIRED", "--confirm must exactly equal CLEAR-HALT")
     config, database, core = build_runtime(config_path)
     now = iso_now()
+
+    def clear_local_files():
+        _remove_authorizations(config)
+        _sync_adapter_mode(config, "OBSERVE_ONLY")
+        for account in config.accounts.values():
+            core._write_local_halt(account, False, "cleared by local console", "local-console")
+
     with database.transaction(immediate=True) as connection:
+        if first_trade_only:
+            blockers = _first_trade_blockers(config, connection, core.pythongo_health())
+            if blockers:
+                raise BridgeError("FIRST_TRADE_NOT_READY", "首次启用条件尚未满足", {"blockers": blockers})
         connection.execute("UPDATE system_state SET value='false',updated_at=? WHERE key='halted'", (now,))
         connection.execute("UPDATE system_state SET value='',updated_at=? WHERE key='halt_reason'", (now,))
         connection.execute("UPDATE system_state SET value='NONE',updated_at=? WHERE key='trade_protection_kind'", (now,))
@@ -233,10 +309,12 @@ def clear_halt(config_path, confirm):
             "INSERT INTO audit_log(occurred_at,actor,action,details_json) VALUES(?,?,?,?)",
             (now, "local-console", "CLEAR_HALT", json_text({"forced_mode": "OBSERVE_ONLY"})),
         )
-    _remove_authorizations(config)
-    _sync_adapter_mode(config, "OBSERVE_ONLY")
-    for account in config.accounts.values():
-        core._write_local_halt(account, False, "cleared by local console", "local-console")
+        if first_trade_only:
+            # Keep the first-use guard and local files under the same DB lock so
+            # a concurrent incident cannot be cleared by this setup-only entry.
+            clear_local_files()
+    if not first_trade_only:
+        clear_local_files()
     return {"halted": False, "mode": "OBSERVE_ONLY"}
 
 
@@ -450,6 +528,8 @@ def main(argv=None):
     halt.add_argument("--reason", required=True)
     clear = sub.add_parser("clear-halt")
     clear.add_argument("--confirm", required=True)
+    first_trade = sub.add_parser("enable-first-trade")
+    first_trade.add_argument("--confirm", required=True)
     bind = sub.add_parser("bind-investor")
     bind.add_argument("account_alias")
     bind.add_argument("--investor-id")
@@ -482,6 +562,8 @@ def main(argv=None):
             result = set_mode(args.config, args.mode, args.confirm)
         elif args.command == "clear-halt":
             result = clear_halt(args.config, args.confirm)
+        elif args.command == "enable-first-trade":
+            result = enable_first_trade(args.config, args.confirm)
         elif args.command == "bind-investor":
             investor_id = args.investor_id or input("Investor ID（非密码，明文显示）: ")
             result = bind_investor(args.config, args.account_alias, investor_id, args.confirm)
