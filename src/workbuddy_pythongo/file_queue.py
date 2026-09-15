@@ -1,3 +1,5 @@
+import contextlib
+import errno
 import json
 import os
 import time
@@ -47,6 +49,51 @@ class FileQueue:
         return target
 
     def consume(self, adapter_instance, folder, handler, expected_types=None, limit=100):
+        if folder not in QUEUE_FOLDERS:
+            raise ValueError("invalid queue folder")
+        with self._consumer_lock(adapter_instance, folder) as acquired:
+            if not acquired:
+                return {"processed": 0, "dead_lettered": 0}
+            return self._consume_locked(adapter_instance, folder, handler, expected_types, limit)
+
+    @contextlib.contextmanager
+    def _consumer_lock(self, adapter_instance, folder):
+        partition = self.ensure_partition(adapter_instance)
+        # Hold a per-folder OS lock from listing through handler commit and
+        # archive. Concurrent scans retry on their next pass; closing the file
+        # also releases ownership if the consumer process exits unexpectedly.
+        with open(os.path.join(partition, ".consume-%s.lock" % folder), "a+b") as lock_file:
+            if os.name == "nt":
+                import msvcrt
+
+                def lock():
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+
+                def unlock():
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                def lock():
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                def unlock():
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.seek(0)
+            try:
+                lock()
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                unlock()
+
+    def _consume_locked(self, adapter_instance, folder, handler, expected_types, limit):
         directory = os.path.join(self.ensure_partition(adapter_instance), folder)
         processed = 0
         dead = 0

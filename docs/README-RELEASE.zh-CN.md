@@ -562,6 +562,12 @@ WorkBuddy 也可以调用 `halt_trading`。只有本机 Console 能解除熔断�
 
 不要在受阻提示处输入模式名称。首次安装保护先选择 `1` 启动观察模式，启动 Adapter 后另开状态入口，按第 6.5 节检查并启用；其他保护先完成 Profile、Adapter 和对账复核，再按第 6.6 节本机解除。
 
+### Worker 显示事件归档的 `queue loop error: [WinError 2]`
+
+旧版后台队列循环与自动交易检查、交易预览可能同时扫描同一事件；其中一个读取者已将文件归档，另一个重复归档时会出现源文件不存在的错误。新版对每个队列分区、文件夹增加跨线程和跨进程的文件锁，从扫描到处理、归档只允许一个读取者操作；其他扫描留待下一轮处理。真实读写故障仍会报告并触发交易保护。
+
+程序包更新后，正在运行的 Worker 仍使用已经加载的旧代码。停止 Adapter，在 Worker 窗口按 `Ctrl+C`，再以 `OBSERVE_ONLY` 启动 Worker 和 Adapter，确认连接恢复并完成同步、对账。此前错误触发的 `INCIDENT_HALT` 不会被更新或重启自动解除；需要恢复交易时，按第 6.6 节复核并本机解除。
+
 ### `doctor` 显示 `worker=OBSERVE_ONLY adapter=LIMITED_AUTO`
 
 数据库模式和 ready 目录配置不一致。先恢复：
