@@ -36,7 +36,9 @@ class DesktopLauncherTests(unittest.TestCase):
             create_shortcuts(initialized["config"], str(shortcuts), python_executable=sys.executable)
             launcher = shortcuts / "启动PythonGO桥接.cmd"
             original = launcher.read_bytes()
-            companions = {path: path.read_bytes() for path in shortcuts.glob("*.ps1")}
+            self.assertEqual({path.name for path in shortcuts.iterdir()}, {
+                "启动PythonGO桥接.cmd", "查看PythonGO桥接状态.cmd",
+            })
             probe_package = root / "probe" / "workbuddy_pythongo"
             probe_package.mkdir(parents=True)
             (probe_package / "__init__.py").write_text("", encoding="utf-8")
@@ -49,8 +51,6 @@ class DesktopLauncherTests(unittest.TestCase):
 
             for newline in ("CRLF", "LF"):
                 launcher.write_bytes(original if newline == "CRLF" else original.replace(b"\r\n", b"\n"))
-                for path, content in companions.items():
-                    path.write_bytes(content if newline == "CRLF" else content.replace(b"\r\n", b"\n"))
                 for codepage in (936, 437):
                     for refresh_exit in (0, 2, 3):
                         with self.subTest(newline=newline, codepage=codepage, refresh_exit=refresh_exit):

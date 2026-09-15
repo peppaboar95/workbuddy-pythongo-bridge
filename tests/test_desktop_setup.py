@@ -1,8 +1,10 @@
 import contextlib
+import base64
 import io
 import json
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import sys
@@ -77,11 +79,46 @@ class DesktopSetupTests(unittest.TestCase):
             launcher_bytes = launcher_path.read_bytes()
             self.assertTrue(launcher_bytes.startswith(b"@echo off\r\nchcp 65001 >nul\r\n"))
             self.assertTrue(launcher_bytes.isascii())
-            launcher = pathlib.Path(shortcuts, "workbuddy-pythongo-start.ps1").read_bytes()
-            self.assertTrue(launcher.startswith(b"\xef\xbb\xbf"))
-            launcher = launcher.decode("utf-8-sig")
+            chunks = re.findall(rb'^set "WB_LAUNCH_SCRIPT_\d+=([A-Za-z0-9+/=]+)"', launcher_bytes, re.MULTILINE)
+            launcher = base64.b64decode(b"".join(chunks)).decode("utf-8")
             self.assertIn("& '%s' -m workbuddy_pythongo.desktop" % python_executable, launcher)
             self.assertIn("& '%s' -m workbuddy_pythongo.manager" % python_executable, launcher)
+            self.assertEqual({path.name for path in pathlib.Path(shortcuts).iterdir()}, {
+                "启动PythonGO桥接.cmd", "查看PythonGO桥接状态.cmd",
+            })
+
+    def test_shortcut_updates_keep_backups_and_previous_helpers_outside_desktop(self):
+        with tempfile.TemporaryDirectory() as root:
+            initialized = initialize(os.path.join(root, "runtime"))
+            shortcuts = pathlib.Path(root, "desktop")
+            create_shortcuts(initialized["config"], str(shortcuts))
+            previous_cmd = b"@echo off\r\necho previous launcher\r\n"
+            (shortcuts / "启动PythonGO桥接.cmd").write_bytes(previous_cmd)
+            previous_helper = (
+                b'\xef\xbb\xbf$ErrorActionPreference = "Stop"\r\n'
+                b'function Wait-ForLauncherKey {}\r\n'
+                b'python -m workbuddy_pythongo.desktop\r\n'
+            )
+            for name in ("workbuddy-pythongo-start.ps1", "workbuddy-pythongo-status.ps1"):
+                (shortcuts / name).write_bytes(previous_helper)
+
+            result = create_shortcuts(initialized["config"], str(shortcuts))
+
+            self.assertEqual({path.name for path in shortcuts.iterdir()}, {
+                "启动PythonGO桥接.cmd", "查看PythonGO桥接状态.cmd",
+            })
+            self.assertEqual(len(result["scripts"]), 2)
+            cmd_backup = pathlib.Path(result["scripts"][0]["backup"])
+            self.assertEqual(cmd_backup.read_bytes(), previous_cmd)
+            self.assertEqual(len(result["retired_helpers"]), 2)
+            for item in result["retired_helpers"]:
+                backup = pathlib.Path(item["backup"])
+                self.assertEqual(backup.read_bytes(), previous_helper)
+                self.assertEqual(backup.parent, cmd_backup.parent)
+            self.assertEqual(cmd_backup.parent, pathlib.Path(initialized["config"]).parent / "launcher-backups")
+            repeated = create_shortcuts(initialized["config"], str(shortcuts))
+            self.assertTrue(all(not item["changed"] for item in repeated["scripts"]))
+            self.assertEqual(repeated["retired_helpers"], [])
 
     @unittest.skipUnless(os.name == "nt", "Requires Windows CMD")
     def test_status_shortcut_uses_utf8_for_chinese_paths_and_redirected_output(self):

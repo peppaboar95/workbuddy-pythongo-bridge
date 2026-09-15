@@ -1,4 +1,5 @@
 import argparse
+import base64
 import ctypes
 import datetime as dt
 import glob
@@ -219,7 +220,7 @@ def _powershell_literal(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _write_changed(path, data):
+def _write_changed(path, data, backup_dir=None):
     path = os.path.abspath(path)
     backup = None
     if os.path.exists(path):
@@ -229,18 +230,26 @@ def _write_changed(path, data):
             return {"path": path, "changed": False, "backup": None}
         timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         backup = "%s.bak.%s" % (path, timestamp)
+        if backup_dir is not None:
+            os.makedirs(backup_dir, exist_ok=True)
+            backup = os.path.join(backup_dir, os.path.basename(backup))
         shutil.copy2(path, backup)
     atomic_write_bytes(path, data)
     return {"path": path, "changed": True, "backup": backup}
 
 
-def _retire_obsolete_shortcut(path):
+def _retire_obsolete_shortcut(path, backup_dir=None):
     path = os.path.abspath(path)
     if not os.path.exists(path):
         return None
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = "%s.bak.%s" % (path, timestamp)
-    os.replace(path, backup)
+    if backup_dir is None:
+        os.replace(path, backup)
+    else:
+        os.makedirs(backup_dir, exist_ok=True)
+        backup = os.path.join(backup_dir, os.path.basename(backup))
+        shutil.move(path, backup)
     return {"path": path, "backup": backup}
 
 
@@ -375,7 +384,7 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
     ]
     migration_command = manager_command + " migrate-margin-policy --confirm MIGRATE-MARGIN-POLICY"
     bodies = {
-        "workbuddy-pythongo-start.ps1": [
+        "启动PythonGO桥接.cmd": [
             '    try { $Host.UI.RawUI.WindowTitle = "WorkBuddy PythonGO 桥接启动器" } catch {}',
             '    Write-Host "请先选择Worker运行模式，随后桥接服务会在当前窗口启动。"',
             '    Write-Host "在模式提示处直接按Enter，将使用安全的OBSERVE_ONLY默认值。"',
@@ -405,7 +414,7 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
             '        }',
             '    }',
         ],
-        "workbuddy-pythongo-status.ps1": [
+        "查看PythonGO桥接状态.cmd": [
             '    try { $Host.UI.RawUI.WindowTitle = "WorkBuddy PythonGO 桥接状态" } catch {}',
             '    Write-Host "正在检查桥接状态……"',
             '    Write-Host "仅在状态异常时自动运行详细诊断。"',
@@ -415,22 +424,38 @@ def create_shortcuts(config_path, target_dir=None, python_executable=None):
         ],
     }
     results = []
+    backup_dir = os.path.join(os.path.dirname(config_path), "launcher-backups")
     for name, body in bodies.items():
-        content = "\r\n".join(powershell_prefix + body + powershell_suffix) + "\r\n"
-        results.append(_write_changed(os.path.join(target_dir, name), content.encode("utf-8-sig")))
-    for name, companion in (
-        ("启动PythonGO桥接.cmd", "workbuddy-pythongo-start.ps1"),
-        ("查看PythonGO桥接状态.cmd", "workbuddy-pythongo-status.ps1"),
-    ):
+        script = "\r\n".join(powershell_prefix + body + powershell_suffix) + "\r\n"
+        # ASCII chunks keep CMD parsing and individual command lines independent
+        # of the Windows code page, newline style and length of Chinese paths.
+        payload = base64.b64encode(script.encode("utf-8")).decode("ascii")
+        chunks = [payload[offset:offset + 768] for offset in range(0, len(payload), 768)]
+        assignments = "".join(
+            'set "WB_LAUNCH_SCRIPT_%d=%s"\r\n' % (index, chunk)
+            for index, chunk in enumerate(chunks)
+        )
         content = (
             batch_prefix
-            + 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0'
-            + companion
-            + '"\r\nexit /b %ERRORLEVEL%\r\n'
+            + assignments
+            + 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "'
+            + "$wbPayload=''; for($wbPart=0; $wbPart -lt %d; $wbPart++){" % len(chunks)
+            + "$wbPayload+=[Environment]::GetEnvironmentVariable('WB_LAUNCH_SCRIPT_'+$wbPart)}; "
+            + "& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString("
+            + '[Convert]::FromBase64String($wbPayload))))"\r\n'
+            + 'exit /b %ERRORLEVEL%\r\n'
         )
-        results.append(_write_changed(os.path.join(target_dir, name), content.encode("ascii")))
+        results.append(_write_changed(os.path.join(target_dir, name), content.encode("ascii"), backup_dir))
+    retired_helpers = []
+    for name in ("workbuddy-pythongo-start.ps1", "workbuddy-pythongo-status.ps1"):
+        path = os.path.join(target_dir, name)
+        if os.path.isfile(path):
+            with open(path, "rb") as stream:
+                helper = stream.read()
+            if b"function Wait-ForLauncherKey" in helper and b"workbuddy_pythongo.desktop" in helper:
+                retired_helpers.append(_retire_obsolete_shortcut(path, backup_dir))
     retired = _retire_obsolete_shortcut(os.path.join(target_dir, "更新PythonGO保证金数据.cmd"))
-    return {"directory": target_dir, "scripts": results, "retired": retired}
+    return {"directory": target_dir, "scripts": results, "retired": retired, "retired_helpers": retired_helpers}
 
 
 def merge_mcp_config(path, config_path, python_executable=None):
