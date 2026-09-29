@@ -181,7 +181,7 @@ python -m workbuddy_pythongo.manager --config $BridgeConfig migrate-margin-polic
 
 ## 4. 部署 PythonGO Adapter
 
-首次配置向导会搜索常见无限易安装位置。选择正确的 `pyStrategy\self_strategy` 后，向导仅部署两个必要文件；同名旧文件先备份为 `.bak.<时间戳>`，旧的 `pythongo_adapter.json` 和 `pythongo_profile.json` 也只会改名保留，不会直接删除。若自动发现失败或当时跳过，再按下面步骤手工操作。
+首次配置向导会搜索常见无限易安装位置，包括 `%APPDATA%` 下的 Roaming 数据目录。选择正确的 `pyStrategy\self_strategy` 后，向导仅部署两个必要文件；它先部署定位文件，再部署 Adapter，并在完成后逐字节校验两者，避免留下“新 Adapter + 旧定位文件”的半完成状态。同名旧文件先备份为 `.bak.<时间戳>`，旧的 `pythongo_adapter.json` 和 `pythongo_profile.json` 也只会改名保留，不会直接删除。若自动发现失败或当时跳过，再按下面步骤手工操作。
 
 1. 完整退出无限易；
 2. 仅把 `$ReadyDir` 中的两个部署文件复制到目标无限易 PythonGO 的 `pyStrategy\self_strategy`：

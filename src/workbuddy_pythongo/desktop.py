@@ -183,6 +183,7 @@ def discover_pythongo_strategy_dirs(environ=None, home=None):
         os.path.join(home, "Documents"),
         environ.get("ProgramFiles"),
         environ.get("ProgramFiles(x86)"),
+        environ.get("APPDATA"),
         environ.get("LOCALAPPDATA"),
     ]
     patterns = []
@@ -275,21 +276,95 @@ def deploy_adapter_files(ready_dir, strategy_dir):
             "未找到目标目录的pyStrategy父目录，请先确认无限易安装位置",
             {"path": py_strategy_dir},
         )
-    sources = [os.path.join(ready_dir, name) for name in DEPLOYMENT_FILENAMES]
-    missing = [path for path in sources if not os.path.isfile(path)]
+    sources = {
+        name: os.path.join(ready_dir, name)
+        for name in DEPLOYMENT_FILENAMES
+    }
+    missing = [path for path in sources.values() if not os.path.isfile(path)]
     if missing:
         raise BridgeError("READY_BUNDLE_INCOMPLETE", "runtime中的无限易部署文件不完整", {"missing": missing})
-    os.makedirs(strategy_dir, exist_ok=True)
-    deployed = []
-    for source, name in zip(sources, DEPLOYMENT_FILENAMES):
+
+    expected_adapter_config = os.path.abspath(os.path.join(ready_dir, "pythongo_adapter.json"))
+    locator_source = sources["pythongo_adapter.path"]
+    with open(locator_source, "r", encoding="utf-8-sig") as stream:
+        locator_target = os.path.expandvars(stream.read().strip())
+    if not locator_target:
+        raise BridgeError("READY_BUNDLE_INVALID", "runtime中的Adapter定位文件为空", {"path": locator_source})
+    if not os.path.isabs(locator_target):
+        locator_target = os.path.join(os.path.dirname(locator_source), locator_target)
+    locator_target = os.path.abspath(locator_target)
+    if (
+        os.path.normcase(locator_target) != os.path.normcase(expected_adapter_config)
+        or not os.path.isfile(expected_adapter_config)
+    ):
+        raise BridgeError(
+            "READY_BUNDLE_INVALID",
+            "runtime中的Adapter定位文件未指向当前ready配置",
+            {"path": locator_source, "target": locator_target, "expected": expected_adapter_config},
+        )
+
+    source_data = {}
+    for name, source in sources.items():
         with open(source, "rb") as stream:
-            deployed.append(_write_changed(os.path.join(strategy_dir, name), stream.read()))
+            source_data[name] = stream.read()
+
+    os.makedirs(strategy_dir, exist_ok=True)
+    destinations = {
+        name: os.path.join(strategy_dir, name)
+        for name in DEPLOYMENT_FILENAMES
+    }
+    originals = {}
+    for name, destination in destinations.items():
+        try:
+            with open(destination, "rb") as stream:
+                originals[name] = stream.read()
+        except FileNotFoundError:
+            originals[name] = None
+
+    deployed = []
+    # Install the locator first.  If deployment is interrupted, never leave a
+    # newly installed Adapter depending on a stale or missing locator.
+    deployment_order = ("pythongo_adapter.path", "WorkBuddyPythonGOAdapter.py")
+    try:
+        for name in deployment_order:
+            deployed.append(_write_changed(destinations[name], source_data[name]))
+        for name, destination in destinations.items():
+            with open(destination, "rb") as stream:
+                installed = stream.read()
+            if installed != source_data[name]:
+                raise OSError("deployed file verification failed: %s" % destination)
+    except Exception as exc:
+        rollback_errors = []
+        for name, destination in destinations.items():
+            try:
+                original = originals[name]
+                if original is None:
+                    try:
+                        os.unlink(destination)
+                    except FileNotFoundError:
+                        pass
+                else:
+                    atomic_write_bytes(destination, original)
+            except OSError as rollback_exc:
+                rollback_errors.append("%s: %s" % (destination, rollback_exc))
+        raise BridgeError(
+            "ADAPTER_DEPLOYMENT_FAILED",
+            "无限易部署文件写入或校验失败，已尝试恢复部署前状态",
+            {"path": strategy_dir, "error": str(exc), "rollback_errors": rollback_errors},
+        ) from exc
+
     retired = []
     for name in LEGACY_DEPLOYMENT_FILENAMES:
         result = _retire_obsolete_shortcut(os.path.join(strategy_dir, name))
         if result:
             retired.append(result)
-    return {"directory": strategy_dir, "files": deployed, "retired": retired}
+    return {
+        "directory": strategy_dir,
+        "files": deployed,
+        "retired": retired,
+        "verified": True,
+        "locator_target": locator_target,
+    }
 
 
 def _select_mcp_path(default_mcp_path, input_func):
