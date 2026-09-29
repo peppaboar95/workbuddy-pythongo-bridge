@@ -10,14 +10,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from workbuddy_pythongo.bootstrap import initialize
 from workbuddy_pythongo.console import get_non_observe_mode_blockers
+import workbuddy_pythongo.desktop as desktop_module
 from workbuddy_pythongo.desktop import (
     _status_issues,
     create_shortcuts,
     deploy_adapter_files,
     discover_mcp_config_paths,
+    discover_pythongo_strategy_dirs,
     discover_runtime_root,
     print_doctor_human,
     print_status_human,
@@ -338,17 +341,69 @@ class DesktopSetupTests(unittest.TestCase):
             strategy = os.path.join(root, "无限易 中文", "pyStrategy", "self_strategy")
             os.makedirs(strategy)
             current = pathlib.Path(strategy, "WorkBuddyPythonGOAdapter.py")
+            locator = pathlib.Path(strategy, "pythongo_adapter.path")
             legacy = pathlib.Path(strategy, "pythongo_adapter.json")
             current.write_text("old adapter", encoding="utf-8")
+            locator.write_text(
+                os.path.join(root, "old runtime", "pythongo_ready", "pythongo_futures_01", "pythongo_adapter.json"),
+                encoding="utf-8",
+            )
             legacy.write_text("old json", encoding="utf-8")
 
             result = deploy_adapter_files(initialized["ready_dir"], strategy)
 
             self.assertEqual(result["directory"], os.path.abspath(strategy))
             self.assertEqual(len(result["files"]), 2)
-            self.assertTrue(result["files"][0]["backup"])
+            self.assertTrue(all(item["backup"] for item in result["files"]))
+            self.assertTrue(result["verified"])
+            expected_target = os.path.join(initialized["ready_dir"], "pythongo_adapter.json")
+            self.assertEqual(result["locator_target"], os.path.abspath(expected_target))
+            self.assertEqual(locator.read_text(encoding="utf-8").strip(), os.path.abspath(expected_target))
             self.assertFalse(legacy.exists())
             self.assertTrue(result["retired"][0]["backup"].startswith(str(legacy) + ".bak."))
+
+    def test_adapter_deployment_rolls_back_both_files_when_second_write_fails(self):
+        with tempfile.TemporaryDirectory(prefix="部署回滚 ") as root:
+            initialized = initialize(os.path.join(root, "runtime"))
+            strategy = pathlib.Path(root, "无限易", "pyStrategy", "self_strategy")
+            strategy.mkdir(parents=True)
+            adapter = strategy / "WorkBuddyPythonGOAdapter.py"
+            locator = strategy / "pythongo_adapter.path"
+            adapter.write_bytes(b"old adapter")
+            locator.write_bytes(b"old locator")
+            real_write = desktop_module._write_changed
+            calls = []
+
+            def fail_second_write(path, data, backup_dir=None):
+                calls.append(os.path.basename(path))
+                if len(calls) == 2:
+                    raise OSError("simulated Adapter write failure")
+                return real_write(path, data, backup_dir)
+
+            with mock.patch.object(desktop_module, "_write_changed", side_effect=fail_second_write):
+                with self.assertRaisesRegex(Exception, "已尝试恢复部署前状态"):
+                    deploy_adapter_files(initialized["ready_dir"], str(strategy))
+
+            self.assertEqual(calls, ["pythongo_adapter.path", "WorkBuddyPythonGOAdapter.py"])
+            self.assertEqual(adapter.read_bytes(), b"old adapter")
+            self.assertEqual(locator.read_bytes(), b"old locator")
+
+    def test_strategy_discovery_includes_roaming_appdata(self):
+        with tempfile.TemporaryDirectory(prefix="Roaming 无限易 ") as root:
+            roaming = os.path.join(root, "AppData", "Roaming")
+            strategy = os.path.join(
+                roaming, "InfiniTrader_SimulationBetaX64", "pyStrategy", "self_strategy",
+            )
+            os.makedirs(strategy)
+            environment = {
+                "APPDATA": roaming,
+                # Enables deterministic discovery on non-Windows CI as well.
+                "INFINITRADER_HOME": os.path.join(root, "missing-install-root"),
+            }
+
+            result = discover_pythongo_strategy_dirs(environment, home=os.path.join(root, "home"))
+
+            self.assertEqual(result, [os.path.abspath(strategy)])
 
     def test_mcp_discovery_honors_override_and_common_locations(self):
         with tempfile.TemporaryDirectory() as root:
